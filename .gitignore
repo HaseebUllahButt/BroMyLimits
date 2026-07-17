@@ -1,0 +1,25 @@
+# Runtime data — per-machine usage snapshots
+claude-live-limits-*.json
+
+# Backups created by configure-statusline.js during install
+*.cc-usage-backup
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# OS noise
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# Editor/IDE
+.vscode/
+.idea/
+*.sublime-*
+
+# Dependencies (if any project files are added later)
+node_modules/

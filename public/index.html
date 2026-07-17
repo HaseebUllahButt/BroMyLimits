@@ -1,0 +1,584 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>CC Usage</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f5f3ef;
+    --surface: #ffffff;
+    --surface-2: #f0eeea;
+    --surface-3: #ece9e3;
+    --border: #e4e1da;
+    --border-strong: #d4cfc4;
+    --ink: #1c1b19;
+    --ink-dim: #6f6a60;
+    --accent: #b5652d;
+    --accent-2: #3d6e8c;
+    --accent-soft: #f1e2d3;
+    --accent-2-soft: #e1ebf0;
+    --good: #4c7a4c;
+    --warn: #b5652d;
+    --bad: #ae4b3f;
+    --shadow-sm: 0 1px 2px rgba(28,27,25,0.04);
+    --shadow: 0 1px 2px rgba(28,27,25,0.05), 0 10px 28px -14px rgba(28,27,25,0.12);
+    --shadow-lg: 0 2px 4px rgba(28,27,25,0.04), 0 24px 48px -20px rgba(28,27,25,0.18);
+    --radius: 14px;
+    --radius-lg: 18px;
+    --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14110d; --surface: #1e1b16; --surface-2: #28241d; --surface-3: #302b22; --border: #38332a; --border-strong: #46402f;
+      --ink: #ede9e2; --ink-dim: #9a9488; --accent: #e08a4f; --accent-2: #6fa8c9;
+      --accent-soft: #3a2c1d; --accent-2-soft: #1e2c33;
+      --good: #7fb47f; --warn: #e08a4f; --bad: #d97365;
+      --shadow-sm: 0 1px 2px rgba(0,0,0,0.3);
+      --shadow: 0 1px 2px rgba(0,0,0,0.3), 0 12px 32px -16px rgba(0,0,0,0.55);
+      --shadow-lg: 0 2px 6px rgba(0,0,0,0.35), 0 30px 60px -24px rgba(0,0,0,0.65);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #14110d; --surface: #1e1b16; --surface-2: #28241d; --surface-3: #302b22; --border: #38332a; --border-strong: #46402f;
+    --ink: #ede9e2; --ink-dim: #9a9488; --accent: #e08a4f; --accent-2: #6fa8c9;
+    --accent-soft: #3a2c1d; --accent-2-soft: #1e2c33;
+    --good: #7fb47f; --warn: #e08a4f; --bad: #d97365;
+    --shadow-sm: 0 1px 2px rgba(0,0,0,0.3);
+    --shadow: 0 1px 2px rgba(0,0,0,0.3), 0 12px 32px -16px rgba(0,0,0,0.55);
+    --shadow-lg: 0 2px 6px rgba(0,0,0,0.35), 0 30px 60px -24px rgba(0,0,0,0.65);
+  }
+  :root[data-theme="light"] {
+    --bg: #f5f3ef; --surface: #ffffff; --surface-2: #f0eeea; --surface-3: #ece9e3; --border: #e4e1da; --border-strong: #d4cfc4;
+    --ink: #1c1b19; --ink-dim: #6f6a60; --accent: #b5652d; --accent-2: #3d6e8c;
+    --accent-soft: #f1e2d3; --accent-2-soft: #e1ebf0;
+    --good: #4c7a4c; --warn: #b5652d; --bad: #ae4b3f;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { overflow-x: hidden; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, "Helvetica Neue", sans-serif;
+    font-feature-settings: "ss01", "cv11", "tnum";
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    background-image:
+      radial-gradient(900px 480px at 100% -10%, color-mix(in srgb, var(--accent) 9%, transparent), transparent 60%),
+      radial-gradient(820px 420px at -10% 0%, color-mix(in srgb, var(--accent-2) 8%, transparent), transparent 55%);
+    background-attachment: fixed;
+    min-height: 100vh;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 1.5rem 1rem; }
+
+  .navbar {
+    position: sticky; top: 0; z-index: 10;
+    background: color-mix(in srgb, var(--bg) 78%, transparent);
+    backdrop-filter: blur(18px) saturate(1.4);
+    -webkit-backdrop-filter: blur(18px) saturate(1.4);
+    border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+    margin-bottom: 0.9rem;
+  }
+  .navbar-inner {
+    max-width: 1080px; margin: 0 auto; padding: 0.7rem 1.5rem 0;
+    display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem;
+  }
+  h1 {
+    font-size: 1.18rem; font-weight: 700; letter-spacing: -0.025em; margin: 0;
+    display: inline-flex; align-items: center; gap: 0.55rem;
+  }
+  h1::before {
+    content: ''; width: 10px; height: 10px; border-radius: 3px;
+    background: linear-gradient(135deg, var(--accent), var(--accent-2));
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent);
+  }
+  .updated {
+    font-size: 0.75rem; color: var(--ink-dim); font-variant-numeric: tabular-nums;
+    display: inline-flex; align-items: center; gap: 0.4rem;
+  }
+  .updated::before {
+    content: ''; width: 7px; height: 7px; border-radius: 50%;
+    background: var(--good); box-shadow: 0 0 0 3px color-mix(in srgb, var(--good) 18%, transparent);
+    animation: pulse 2s var(--ease) infinite;
+  }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+
+  .tabs { display: flex; gap: 0.15rem; margin-top: 0.5rem; flex-wrap: wrap; border-bottom: 1px solid transparent; }
+  .tab {
+    display: flex; align-items: center; gap: 0.45rem;
+    padding: 0.4rem 0.85rem; font-size: 0.82rem; font-weight: 600;
+    color: var(--ink-dim); border: none; background: none; cursor: pointer;
+    border-bottom: 2px solid transparent; margin-bottom: -1px;
+    border-radius: 8px 8px 0 0;
+    transition: color 0.18s var(--ease), border-color 0.18s var(--ease), background 0.18s var(--ease);
+  }
+  .tab .dot { width: 8px; height: 8px; border-radius: 50%; box-shadow: 0 0 0 2px color-mix(in srgb, currentColor 0%, transparent); transition: transform 0.18s var(--ease); }
+  .dot.anthropic { background: var(--accent); }
+  .dot.openai { background: var(--accent-2); }
+  .tab:hover { color: var(--ink); background: color-mix(in srgb, var(--surface-2) 60%, transparent); }
+  .tab:hover .dot { transform: scale(1.15); }
+  .tab.active { color: var(--ink); border-bottom-color: var(--tab-accent, var(--accent)); }
+  .tab.active .dot { transform: scale(1.1); }
+
+  .panel { display: none; animation: fadeIn 0.3s var(--ease); }
+  .panel.active { display: block; }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+
+  .stat-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 0.7rem; margin-bottom: 0.7rem; }
+  .stat {
+    background: linear-gradient(180deg, var(--surface), color-mix(in srgb, var(--surface) 92%, var(--surface-2)));
+    border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 0.8rem 1rem; box-shadow: var(--shadow);
+    transition: transform 0.2s var(--ease), box-shadow 0.2s var(--ease), border-color 0.2s var(--ease);
+  }
+  .stat:hover { transform: translateY(-2px); box-shadow: var(--shadow-lg); border-color: var(--border-strong); }
+  .stat .label { font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.07em; color: var(--ink-dim); margin-bottom: 0.3rem; font-weight: 600; }
+  .stat .value { font-size: 1.28rem; font-weight: 700; letter-spacing: -0.025em; font-variant-numeric: tabular-nums; }
+  .stat .sub { font-size: 0.7rem; color: var(--ink-dim); margin-top: 0.2rem; font-variant-numeric: tabular-nums; }
+
+  .card {
+    position: relative;
+    background: linear-gradient(180deg, var(--surface), color-mix(in srgb, var(--surface) 94%, var(--surface-2)));
+    border: 1px solid var(--border); border-radius: var(--radius-lg);
+    padding: 0.9rem 1.2rem; box-shadow: var(--shadow); margin-bottom: 0.75rem;
+  }
+  .card h2 { font-size: 0.78rem; font-weight: 700; margin: 0 0 0.6rem; color: var(--ink-dim); text-transform: uppercase; letter-spacing: 0.06em; display: flex; align-items: center; gap: 0.5rem; }
+  .card h2::before { content: ''; width: 5px; height: 5px; border-radius: 50%; background: var(--accent); }
+
+  .panel-heading { display: flex; align-items: center; gap: 0.6rem; margin: 0 0 0.7rem; font-size: 1.05rem; font-weight: 700; letter-spacing: -0.018em; }
+  .panel-heading .dot { width: 11px; height: 11px; border-radius: 50%; box-shadow: 0 0 0 4px color-mix(in srgb, currentColor 12%, transparent); }
+
+  .limits-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.6rem; }
+  .limits-head h2 { margin: 0; }
+  .refresh-btn {
+    display: inline-flex; align-items: center; gap: 0.35rem;
+    font-size: 0.72rem; font-weight: 600; padding: 0.36rem 0.78rem; border-radius: 999px;
+    border: 1px solid var(--border-strong); background: var(--surface-2); color: var(--ink-dim);
+    cursor: pointer; transition: color 0.18s var(--ease), border-color 0.18s var(--ease), background 0.18s var(--ease), transform 0.18s var(--ease);
+  }
+  .refresh-btn:hover { color: var(--ink); background: var(--surface); border-color: var(--ink-dim); transform: translateY(-1px); box-shadow: var(--shadow-sm); }
+  .refresh-btn:active { transform: translateY(0); }
+  .refresh-btn:disabled { opacity: 0.55; cursor: default; transform: none; box-shadow: none; }
+  .limits-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 0.9rem; }
+  .limit-item .head { display: flex; justify-content: space-between; align-items: baseline; font-size: 0.82rem; margin-bottom: 0.35rem; }
+  .limit-item .head .pct { font-weight: 700; font-variant-numeric: tabular-nums; }
+  .limit-item .bar-track { height: 7px; border-radius: 999px; background: var(--surface-3); overflow: hidden; box-shadow: inset 0 1px 1px rgba(0,0,0,0.08); }
+  .limit-item .bar-fill { height: 100%; border-radius: 999px; background: linear-gradient(90deg, var(--good), color-mix(in srgb, var(--good) 70%, var(--accent-2))); transition: width 0.5s var(--ease); box-shadow: 0 0 12px color-mix(in srgb, var(--good) 35%, transparent); }
+  .limit-item .bar-fill.warn { background: linear-gradient(90deg, var(--warn), color-mix(in srgb, var(--warn) 70%, var(--bad))); box-shadow: 0 0 12px color-mix(in srgb, var(--warn) 35%, transparent); }
+  .limit-item .bar-fill.bad { background: linear-gradient(90deg, var(--bad), color-mix(in srgb, var(--bad) 70%, var(--ink))); box-shadow: 0 0 12px color-mix(in srgb, var(--bad) 40%, transparent); }
+  .limit-item .reset { font-size: 0.7rem; color: var(--ink-dim); margin-top: 0.35rem; }
+  .limit-stale { font-size: 0.7rem; color: var(--ink-dim); margin-top: 0.7rem; }
+  .manual-reset { color: var(--accent-2); }
+
+  .table-scroll { overflow-x: auto; margin: 0 -0.4rem; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.78rem; min-width: 720px; }
+  th, td { text-align: left; padding: 0.4rem 0.6rem; border-bottom: 1px solid var(--border); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  th {
+    color: var(--ink-dim); font-weight: 600; font-size: 0.64rem; text-transform: uppercase; letter-spacing: 0.05em;
+    position: sticky; top: 0; background: var(--surface); z-index: 1;
+  }
+  tbody tr { transition: background 0.15s var(--ease); }
+  tbody tr:hover { background: color-mix(in srgb, var(--surface-2) 75%, transparent); }
+  td:not(:first-child), th:not(:first-child) { text-align: right; }
+  tr:last-child td { border-bottom: none; }
+  td.model-name { white-space: normal; max-width: 220px; font-weight: 550; }
+  td.total-col, th.total-col { font-weight: 700; color: var(--ink); }
+  .tok-sub { display: block; font-size: 0.68rem; color: var(--ink-dim); font-weight: 400; margin-top: 1px; }
+  tr.totals-row td { border-top: 2px solid var(--border-strong); border-bottom: none; font-weight: 700; padding-top: 0.5rem; background: color-mix(in srgb, var(--surface-2) 40%, transparent); }
+  tr.totals-row td.total-col { color: var(--accent); }
+
+  .pill { display: inline-block; font-size: 0.6rem; padding: 2px 8px; border-radius: 999px; font-weight: 600; margin-left: 6px; letter-spacing: 0.02em; vertical-align: middle; }
+  .pill.unpriced { background: color-mix(in srgb, var(--bad) 18%, transparent); color: var(--bad); border: 1px solid color-mix(in srgb, var(--bad) 40%, transparent); }
+  .empty { color: var(--ink-dim); font-size: 0.86rem; }
+  footer { text-align: center; color: var(--ink-dim); font-size: 0.7rem; margin-top: 1rem; letter-spacing: 0.01em; }
+
+  .tab.settings-tab { margin-left: auto; color: var(--ink-dim); }
+  .toggle-row {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0.85rem 0; border-bottom: 1px solid var(--border);
+    transition: padding 0.2s var(--ease);
+  }
+  .toggle-row:last-child { border-bottom: none; }
+  .toggle-row:hover .who { color: var(--ink); }
+  .toggle-row .who { display: flex; align-items: center; gap: 0.6rem; font-size: 0.9rem; font-weight: 550; transition: color 0.15s var(--ease); }
+  .toggle-row .who .dot { width: 9px; height: 9px; border-radius: 50%; }
+  .switch { position: relative; width: 40px; height: 22px; flex: none; }
+  .switch input { opacity: 0; width: 0; height: 0; }
+  .switch .track {
+    position: absolute; inset: 0; background: var(--surface-3); border: 1px solid var(--border);
+    border-radius: 999px; cursor: pointer; transition: background 0.2s var(--ease), border-color 0.2s var(--ease);
+  }
+  .switch .track::before {
+    content: ''; position: absolute; width: 16px; height: 16px; left: 2px; top: 2px;
+    background: var(--ink-dim); border-radius: 50%;
+    transition: transform 0.22s var(--ease), background 0.2s var(--ease);
+    box-shadow: 0 1px 2px rgba(0,0,0,0.2);
+  }
+  .switch input:checked + .track { background: var(--accent-2-soft); border-color: var(--accent-2); }
+  .switch input:checked + .track::before { transform: translateX(18px); background: var(--accent-2); }
+
+  ::selection { background: color-mix(in srgb, var(--accent) 28%, transparent); }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+  }
+</style>
+</head>
+<body>
+<div class="navbar">
+  <div class="navbar-inner">
+    <h1>Agent Usage</h1>
+    <div class="updated" id="updated">loading…</div>
+  </div>
+  <div class="navbar-inner" style="padding-top:0">
+    <div class="tabs" id="tabs"></div>
+  </div>
+</div>
+
+<div class="wrap" id="panels"></div>
+
+<footer id="footer">refreshes every 30s · served locally · costs computed from real tokens × published rate cards</footer>
+
+<script>
+const fmt$ = n => '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const fmt$4 = n => '$' + n.toLocaleString('en-US', { minimumFractionDigits: 4, maximumFractionDigits: 4 });
+const fmtTok = n => {
+  if (n >= 1e6) return (n / 1e6).toFixed(2) + 'M';
+  if (n >= 1e3) return (n / 1e3).toFixed(1) + 'k';
+  return String(n || 0);
+};
+
+const dotClass = provider => provider === 'claude' ? 'anthropic' : 'openai';
+const accentVar = provider => provider === 'claude' ? '--accent' : '--accent-2';
+const providerName = provider => provider === 'claude' ? 'Claude Code' : 'Codex CLI';
+const accountTitle = a => `${providerName(a.provider)} — ${a.label}`;
+
+let builtForIds = null;
+let lastAllAccounts = [];
+
+const HIDDEN_KEY = 'cc-usage-hidden-accounts';
+const ACTIVE_TAB_KEY = 'cc-usage-active-tab';
+function getHidden() {
+  try { return new Set(JSON.parse(localStorage.getItem(HIDDEN_KEY) || '[]')); } catch { return new Set(); }
+}
+function setHidden(set) {
+  localStorage.setItem(HIDDEN_KEY, JSON.stringify([...set]));
+}
+function getActiveTab() {
+  try { return localStorage.getItem(ACTIVE_TAB_KEY); } catch { return null; }
+}
+function setActiveTab(id) {
+  try { localStorage.setItem(ACTIVE_TAB_KEY, id); } catch {}
+}
+function toggleHidden(accountId, visible) {
+  const hidden = getHidden();
+  if (visible) hidden.delete(accountId); else hidden.add(accountId);
+  setHidden(hidden);
+  builtForIds = null; // force full rebuild so hidden tabs disappear/reappear
+  render({ accounts: lastAllAccounts, fetchedAt: lastFetchedAt });
+}
+
+function settingsPanelHtml(accounts) {
+  const hidden = getHidden();
+  const byProvider = { claude: [], codex: [] };
+  for (const a of accounts) byProvider[a.provider].push(a);
+
+  const rows = (list) => list.map(a => `
+    <div class="toggle-row">
+      <span class="who"><span class="dot ${dotClass(a.provider)}"></span>${accountTitle(a)}</span>
+      <label class="switch">
+        <input type="checkbox" data-toggle-account="${a.id}" ${hidden.has(a.id) ? '' : 'checked'} />
+        <span class="track"></span>
+      </label>
+    </div>`).join('');
+
+  const section = (title, list) => list.length ? `
+    <div class="card">
+      <h2>${title}</h2>
+      ${rows(list)}
+    </div>` : '';
+
+  return `
+    <div class="panel-heading">Settings</div>
+    <p class="empty" style="margin-bottom:1rem">Toggle which accounts show up as tabs. Hidden accounts are still tracked in the background — flip them back on any time.</p>
+    ${section('Claude Code accounts', byProvider.claude)}
+    ${section('Codex CLI accounts', byProvider.codex)}
+  `;
+}
+
+document.addEventListener('change', (e) => {
+  const t = e.target.closest('[data-toggle-account]');
+  if (t) toggleHidden(t.dataset.toggleAccount, t.checked);
+});
+
+function statRow(section) {
+  const items = [
+    { label: 'Today', value: fmt$(section.today.cost), sub: fmtTok(section.today.tokens) + ' tokens' },
+    { label: 'Last 7 days', value: fmt$(section.last7d.cost), sub: fmtTok(section.last7d.tokens) + ' tokens' },
+    { label: 'This month', value: fmt$(section.month.cost), sub: fmtTok(section.month.tokens) + ' tokens' },
+    { label: 'All time', value: fmt$(section.allTime.cost), sub: fmtTok(section.allTime.tokens) + ' tokens' },
+  ];
+  return items.map(s => `
+    <div class="stat">
+      <div class="label">${s.label}</div>
+      <div class="value">${s.value}</div>
+      <div class="sub">${s.sub}</div>
+    </div>`).join('');
+}
+
+function cell(cost, tokens) {
+  return `<td>${fmt$4(cost)}<span class="tok-sub">${fmtTok(tokens)} tok</span></td>`;
+}
+
+function modelTable(models) {
+  const head = `<thead><tr>
+    <th>Model</th>
+    <th>Input</th>
+    <th>Output</th>
+    <th>Cache write</th>
+    <th>Cache read</th>
+    <th class="total-col">Total</th>
+  </tr></thead>`;
+
+  if (!models.length) {
+    return head + '<tbody><tr><td colspan="6" class="empty">No data yet</td></tr></tbody>';
+  }
+
+  let body = '';
+  const grand = { input: 0, output: 0, cacheWrite: 0, cacheRead: 0, total: 0 };
+
+  for (const m of models) {
+    const c = m.cost, t = m.tokens;
+    grand.input += c.input; grand.output += c.output;
+    grand.cacheWrite += c.cacheWrite; grand.cacheRead += c.cacheRead; grand.total += c.total;
+    body += `<tr>
+      <td class="model-name">${m.modelName}${m.unpriced ? '<span class="pill unpriced">no rate card</span>' : ''}</td>
+      ${cell(c.input, t.input)}
+      ${cell(c.output, t.output)}
+      ${cell(c.cacheWrite, t.cacheWrite)}
+      ${cell(c.cacheRead, t.cacheRead)}
+      <td class="total-col">${fmt$(c.total)}</td>
+    </tr>`;
+  }
+
+  body += `<tr class="totals-row">
+    <td>Total</td>
+    <td>${fmt$(grand.input)}</td>
+    <td>${fmt$(grand.output)}</td>
+    <td>${fmt$(grand.cacheWrite)}</td>
+    <td>${fmt$(grand.cacheRead)}</td>
+    <td class="total-col">${fmt$(grand.total)}</td>
+  </tr>`;
+
+  return head + '<tbody>' + body + '</tbody>';
+}
+
+function fmtResetsAt(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  const diffMs = d - new Date();
+  if (diffMs <= 0) return 'resets soon';
+  const hrs = diffMs / 3600000;
+  if (hrs < 24) return `resets in ${Math.round(hrs)}h`;
+  return `resets in ${Math.round(hrs / 24)}d (${d.toLocaleDateString([], { month: 'short', day: 'numeric' })})`;
+}
+
+function limitItem(label, entry) {
+  if (!entry) return '';
+  const pct = entry.percent;
+  const cls = pct >= 90 ? 'bad' : pct >= 70 ? 'warn' : '';
+  return `
+    <div class="limit-item">
+      <div class="head"><span>${label}</span><span class="pct">${pct}%</span></div>
+      <div class="bar-track"><div class="bar-fill ${cls}" style="width:${pct}%"></div></div>
+      <div class="reset">${fmtResetsAt(entry.resetsAt)}</div>
+    </div>`;
+}
+
+const lastRefreshNoteByAccount = {};
+
+function fmtExpiryDate(iso) {
+  if (!iso) return '';
+  return new Date(iso).toLocaleDateString([], { year: 'numeric', month: 'short', day: 'numeric' });
+}
+
+function fmtExpiryDateTime(iso) {
+  if (!iso) return '';
+  return new Date(iso).toLocaleString([], {
+    year: 'numeric', month: 'short', day: 'numeric',
+    hour: 'numeric', minute: '2-digit',
+  });
+}
+
+function fmtTimeLeft(iso) {
+  if (!iso) return 'expiry unavailable';
+  const remaining = new Date(iso).getTime() - Date.now();
+  if (remaining <= 0) return 'expired';
+  const totalMinutes = Math.ceil(remaining / 60000);
+  const days = Math.floor(totalMinutes / 1440);
+  const hours = Math.floor((totalMinutes % 1440) / 60);
+  const minutes = totalMinutes % 60;
+  if (days) return `${days}d ${hours}h ${minutes}m`;
+  if (hours) return `${hours}h ${minutes}m`;
+  return `${minutes}m`;
+}
+
+function creditsLine(credits) {
+  if (!credits) return '';
+  const fmtRange = (r) => r ? `${r[0]}–${r[1]}` : null;
+  const parts = [`${credits.balance} message credits left`];
+  const local = fmtRange(credits.approxLocalMessages);
+  const cloud = fmtRange(credits.approxCloudMessages);
+  if (local) parts.push(`~${local} local msgs`);
+  if (cloud) parts.push(`~${cloud} cloud msgs`);
+  if (credits.expiresAt) parts.push(`expires ${fmtExpiryDate(credits.expiresAt)}`);
+  return `<div class="limit-stale">${parts.join(' · ')}</div>`;
+}
+
+function resetsAvailableLine(resetsAvailable) {
+  if (!resetsAvailable) return '';
+  const parts = [`${resetsAvailable.available} manual limit reset${resetsAvailable.available === 1 ? '' : 's'} available`];
+  if (resetsAvailable.expiresAt) {
+    parts.push(`expires in <span class="manual-reset-time" data-countdown="${resetsAvailable.expiresAt}">${fmtTimeLeft(resetsAvailable.expiresAt)}</span> (${fmtExpiryDateTime(resetsAvailable.expiresAt)})`);
+  } else {
+    parts.push('expiry unavailable from Codex');
+  }
+  return `<div class="limit-stale manual-reset">${parts.join(' · ')}</div>`;
+}
+
+function limitsCard(account, rateLimits) {
+  const note = lastRefreshNoteByAccount[account.id];
+  const noteHtml = note ? `<div class="limit-stale">${note}</div>` : '';
+  const heading = `${providerName(account.provider)} account limits`;
+  const hasWindows = rateLimits?.session || rateLimits?.weekly;
+  if (!rateLimits || !hasWindows) {
+    return `
+      <div class="limits-head"><h2>${heading}</h2>${refreshButton(account.id)}</div>
+      <p class="empty">No usage data yet.</p>${noteHtml}${rateLimits ? resetsAvailableLine(rateLimits.resetsAvailable) : ''}`;
+  }
+  return `
+    <div class="limits-head"><h2>${heading}</h2>${refreshButton(account.id)}</div>
+    <div class="limits-grid">
+      ${limitItem('Session (5h)', rateLimits.session)}
+      ${limitItem('Weekly', rateLimits.weekly)}
+    </div>
+    ${noteHtml}${creditsLine(rateLimits.credits)}${resetsAvailableLine(rateLimits.resetsAvailable)}`;
+}
+
+function refreshButton(id) {
+  return `<button class="refresh-btn" data-account="${id}" title="Force a live check now">↻ Refresh</button>`;
+}
+
+function updateCountdowns() {
+  document.querySelectorAll('[data-countdown]').forEach((el) => {
+    el.textContent = fmtTimeLeft(el.dataset.countdown);
+  });
+}
+
+let refreshing = false;
+async function refreshLimits(accountId) {
+  if (refreshing) return;
+  refreshing = true;
+  document.querySelectorAll('.refresh-btn').forEach(b => { b.disabled = true; });
+  const btn = document.querySelector(`.refresh-btn[data-account="${accountId}"]`);
+  if (btn) btn.textContent = '…';
+  try {
+    const res = await fetch('/api/refresh-limits?id=' + encodeURIComponent(accountId), { method: 'POST' });
+    const result = await res.json();
+    const time = new Date().toLocaleTimeString();
+    const r = result[accountId];
+    lastRefreshNoteByAccount[accountId] = (r?.live ? 'refreshed live' : 'still rate-limited, showing last known reading') + ' (' + time + ')';
+  } catch {
+    lastRefreshNoteByAccount[accountId] = 'Refresh request failed — dashboard server may be down.';
+  } finally {
+    refreshing = false;
+    load();
+  }
+}
+
+document.addEventListener('click', (e) => {
+  const btn = e.target.closest('.refresh-btn');
+  if (btn) refreshLimits(btn.dataset.account);
+});
+
+document.getElementById('tabs').addEventListener('click', (e) => {
+  const btn = e.target.closest('.tab');
+  if (!btn) return;
+  setActiveTab(btn.dataset.id);
+  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t === btn));
+  document.querySelectorAll('.panel').forEach(p => p.classList.toggle('active', p.id === 'panel-' + btn.dataset.id));
+});
+
+function ensureLayout(allAccounts, visibleAccounts) {
+  const key = allAccounts.map(a => a.id).join(',') + '|' + [...getHidden()].sort().join(',');
+  if (key === builtForIds) return;
+  builtForIds = key;
+
+  const wasActiveId = document.querySelector('.tab.active')?.dataset.id;
+  const preferredId = getActiveTab() || wasActiveId;
+  const isVisibleAccount = preferredId && visibleAccounts.some(a => a.id === preferredId);
+  const activeId = preferredId === 'settings' || isVisibleAccount
+    ? preferredId
+    : (visibleAccounts[0]?.id ?? 'settings');
+
+  document.getElementById('tabs').innerHTML =
+    visibleAccounts.map(a => `
+      <button class="tab${a.id === activeId ? ' active' : ''}" data-id="${a.id}" style="--tab-accent:var(${accentVar(a.provider)})">
+        <span class="dot ${dotClass(a.provider)}"></span>${accountTitle(a)}
+      </button>`).join('') +
+    `<button class="tab settings-tab${activeId === 'settings' ? ' active' : ''}" data-id="settings">⚙ Settings</button>`;
+
+  document.getElementById('panels').innerHTML =
+    visibleAccounts.map(a => `
+      <div class="panel${a.id === activeId ? ' active' : ''}" id="panel-${a.id}" style="--tab-accent:var(${accentVar(a.provider)})">
+        <div class="panel-heading"><span class="dot ${dotClass(a.provider)}"></span>${accountTitle(a)}</div>
+        <div class="card" id="limits-${a.id}"></div>
+        <div class="stat-row" id="stats-${a.id}"></div>
+        <div class="card">
+          <h2>Cost breakdown by model</h2>
+          <div class="table-scroll"><table id="models-${a.id}"></table></div>
+        </div>
+      </div>`).join('') +
+    `<div class="panel${activeId === 'settings' ? ' active' : ''}" id="panel-settings">${settingsPanelHtml(allAccounts)}</div>`;
+}
+
+let lastFetchedAt = null;
+
+async function load() {
+  const res = await fetch('/api/usage');
+  const data = await res.json();
+  render(data);
+}
+
+function render(data) {
+  lastFetchedAt = data.fetchedAt;
+  document.getElementById('updated').textContent = 'updated ' + new Date(data.fetchedAt).toLocaleTimeString();
+
+  if (!data.accounts || !data.accounts.length) {
+    document.getElementById('tabs').innerHTML = '';
+    document.getElementById('panels').innerHTML = '<p class="empty">No Claude or Codex accounts detected on this machine.</p>';
+    return;
+  }
+
+  lastAllAccounts = data.accounts;
+  const hidden = getHidden();
+  const visible = data.accounts.filter(a => !hidden.has(a.id));
+
+  ensureLayout(data.accounts, visible);
+
+  for (const a of visible) {
+    document.getElementById(`limits-${a.id}`).innerHTML = limitsCard(a, a.rateLimits);
+    document.getElementById(`stats-${a.id}`).innerHTML = statRow(a);
+    document.getElementById(`models-${a.id}`).innerHTML = modelTable(a.models);
+  }
+  updateCountdowns();
+}
+
+load();
+setInterval(load, 30000);
+setInterval(updateCountdowns, 1000);
+</script>
+</body>
+</html>
