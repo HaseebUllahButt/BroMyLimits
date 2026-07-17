@@ -18,9 +18,23 @@ if (( node_major < 18 )); then
 fi
 
 if ! command -v ccusage >/dev/null 2>&1; then
-  echo "ccusage is required and was not found on PATH." >&2
-  echo "Install it first, then run this script again." >&2
-  exit 1
+  if ! command -v npm >/dev/null 2>&1; then
+    echo "ccusage is required and was not found on PATH." >&2
+    echo "npm is also unavailable, so it can't be installed automatically." >&2
+    echo "Install Node.js/npm or ccusage manually, then run this script again." >&2
+    exit 1
+  fi
+  echo "ccusage not found; installing it globally via npm..."
+  if ! npm install -g ccusage; then
+    echo "Failed to install ccusage via npm." >&2
+    echo "Install it manually, then run this script again." >&2
+    exit 1
+  fi
+  if ! command -v ccusage >/dev/null 2>&1; then
+    echo "ccusage was installed but is not on PATH." >&2
+    echo "Ensure npm's global bin directory is on your PATH, then run this script again." >&2
+    exit 1
+  fi
 fi
 
 default_port="${PORT:-47291}"
