@@ -6,7 +6,7 @@ A self-hosted dashboard that aggregates usage data across all your Claude Code a
 
 ## Features
 
-- **Multi-account out of the box** — auto-discovers every `~/.claude*` and `~/.codex*` directory with valid configs. No setup per account.
+- **Multi-account out of the box** — auto-discovers every valid Claude config folder (any directory containing `.claude.json`) anywhere under `$HOME`, plus every `~/.codex*` directory. No setup per account.
 - **Live & cached rate limits** — reads rate-limit snapshots pushed by the Claude Code statusline hook after every prompt (freshest possible data, zero extra API calls). Falls back to `.claude.json` cache when no statusline is installed.
 - **Manual refresh** — click to bypass the 15-minute backoff and hit Anthropic/OpenAI's usage endpoints live.
 - **Real cost, not guesswork** — token counts × published per-model rates from `platform.claude.com` and `platform.openai.com`. Handles Claude Sonnet 5 introductory pricing, Codex credit-based plans, and flags unknown models instead of silently showing $0.

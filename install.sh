@@ -71,15 +71,20 @@ exec env PORT="\${1:-$port}" node "$install_dir/server.js"
 EOF
 chmod 0755 "$launcher"
 
-for config_dir in "$HOME"/.claude "$HOME"/.claude-*; do
-  [[ -d "$config_dir" && -f "$config_dir/.claude.json" ]] || continue
+while IFS= read -r config_dir; do
+  [[ -d "$config_dir" ]] || continue
   config_name="$(basename "$config_dir")"
   account_label="${config_name#.claude-}"
   [[ "$config_name" == ".claude" ]] && account_label="default"
+  account_label="${account_label#.}"
   settings_path="$config_dir/settings.json"
   "$node_bin" "$install_dir/configure-statusline.js" \
     "$settings_path" "$node_bin" "$install_dir/statusline.js" "$account_label"
-done
+done < <(find "$HOME" -xdev \
+  \( -path '*/node_modules' -o -path '*/.git' -o -path '*/.cache' -o -path '*/.npm' \
+     -o -path '*/.venv' -o -path '*/venv' -o -path '*/.cargo' -o -path '*/.rustup' \
+     -o -path '*/.Trash' -o -path '*/.local/share/Trash' \) -prune -o \
+  -type f -name '.claude.json' -print 2>/dev/null | xargs -r -n1 dirname | sort -u)
 
 cat > "$service_file" <<EOF
 [Unit]
