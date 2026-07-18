@@ -71,8 +71,15 @@ exec env PORT="\${1:-$port}" node "$install_dir/server.js"
 EOF
 chmod 0755 "$launcher"
 
-while IFS= read -r config_dir; do
+declare -A configured_dirs=()
+while IFS= read -r marker_path; do
+  config_dir="$(dirname -- "$marker_path")"
+  # Claude keeps the default account marker at ~/.claude.json, but its
+  # settings belong in ~/.claude/. Never write settings.json into $HOME.
+  [[ "$marker_path" == "$HOME/.claude.json" ]] && config_dir="$HOME/.claude"
   [[ -d "$config_dir" ]] || continue
+  [[ -n "${configured_dirs[$config_dir]:-}" ]] && continue
+  configured_dirs["$config_dir"]=1
   config_name="$(basename "$config_dir")"
   account_label="${config_name#.claude-}"
   [[ "$config_name" == ".claude" ]] && account_label="default"
@@ -84,7 +91,7 @@ done < <(find "$HOME" -xdev \
   \( -path '*/node_modules' -o -path '*/.git' -o -path '*/.cache' -o -path '*/.npm' \
      -o -path '*/.venv' -o -path '*/venv' -o -path '*/.cargo' -o -path '*/.rustup' \
      -o -path '*/.Trash' -o -path '*/.local/share/Trash' \) -prune -o \
-  -type f -name '.claude.json' -print 2>/dev/null | xargs -r -n1 dirname | sort -u)
+  -type f -name '.claude.json' -print 2>/dev/null | sort -u)
 
 cat > "$service_file" <<EOF
 [Unit]

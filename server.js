@@ -103,6 +103,9 @@ async function getStatuslineClaudeRateLimits(account) {
     try {
       const raw = await readFile(snapshotPath, 'utf8');
       const u = JSON.parse(raw);
+      // Only trust self-identifying snapshots. This also rejects legacy files
+      // that may already have been written under the wrong account filename.
+      if (u.accountId !== account.id) return null;
       if (!u.session && !u.weekly) return null;
       return {
         fetchedAtMs: u.fetchedAtMs,
