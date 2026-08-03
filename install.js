@@ -26,6 +26,7 @@ const args = new Set(process.argv.slice(2));
 const skipDeps = args.has('--skip-deps');
 const skipStatusline = args.has('--no-statusline');
 const skipService = args.has('--no-service');
+const skipBrowser = args.has('--no-browser');
 const requestedPort = process.env.PORT || process.argv.slice(2).find((value) => /^\d+$/.test(value)) || '47291';
 if (!/^\d+$/.test(requestedPort) || Number(requestedPort) < 1 || Number(requestedPort) > 65535) {
   throw new Error('port must be a number from 1 to 65535');
@@ -201,6 +202,18 @@ async function installMacService() {
   console.log('Load it with: launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.cc-usage-dashboard.plist');
 }
 
+function openDashboard() {
+  if (skipBrowser) return;
+  const url = `http://127.0.0.1:${dashboardPort}`;
+  if (process.platform === 'darwin') {
+    spawnSync('open', [url], { stdio: 'ignore' });
+  } else if (process.platform === 'linux') {
+    spawnSync('xdg-open', [url], { stdio: 'ignore' });
+  } else if (process.platform === 'win32') {
+    spawnSync('cmd.exe', ['/c', 'start', '', url], { stdio: 'ignore', windowsHide: true });
+  }
+}
+
 async function main() {
   await installFiles();
   await installDependencies();
@@ -210,6 +223,7 @@ async function main() {
   await installMacService();
   console.log(`Dashboard: http://127.0.0.1:${dashboardPort}`);
   console.log('Profiles are discovered automatically each time the dashboard refreshes.');
+  openDashboard();
 }
 
 main().catch((error) => {

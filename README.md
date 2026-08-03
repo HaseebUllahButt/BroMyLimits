@@ -16,7 +16,21 @@ To choose a port explicitly:
 ./install.sh 47291
 ```
 
-On macOS, run `install.sh` in Terminal or double-click `install.command`. On Windows, run `install.ps1` from PowerShell. The installer creates a user-local app directory and launcher, installs `ccusage` locally when npm is available, configures the Claude statusline for every detected Claude profile, and enables a user service on Linux/macOS. Use `--skip-deps`, `--no-statusline`, or `--no-service` to disable those parts.
+### One-paste install
+
+Linux or macOS Terminal:
+
+```sh
+d="$(mktemp -d)" && git clone --depth 1 https://github.com/HaseebUllahButt/BroMyLimits.git "$d/BroMyLimits" && "$d/BroMyLimits/install.sh" 47291
+```
+
+Windows PowerShell:
+
+```powershell
+$ErrorActionPreference='Stop'; $d=Join-Path $env:TEMP ('BroMyLimits-'+[guid]::NewGuid()); git clone --depth 1 https://github.com/HaseebUllahButt/BroMyLimits.git $d; powershell -ExecutionPolicy Bypass -File (Join-Path $d 'install.ps1') 47291
+```
+
+On macOS, run `install.sh` in Terminal or double-click `install.command`. On Windows, run `install.ps1` from PowerShell. The installer creates a user-local app directory and launcher, installs `ccusage` locally when npm is available, configures the Claude statusline for every detected Claude profile, enables a user service on Linux/macOS, and opens the dashboard automatically. Use `--skip-deps`, `--no-statusline`, `--no-service`, or `--no-browser` to disable those parts.
 
 Start it with `cc-usage-dashboard`, then open <http://127.0.0.1:47291>.
 
