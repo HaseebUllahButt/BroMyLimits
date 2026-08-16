@@ -332,22 +332,45 @@ async function getCachedClaudeRateLimits(account) {
   return statusline.fetchedAtMs >= configCache.fetchedAtMs ? statusline : configCache;
 }
 
+// Which Claude login a profile directory currently holds. A profile keeps its
+// name across a re-authentication — an expired subscription replaced via device
+// OAuth lands in the same directory — but the limit percentages afterwards
+// belong to whichever account is now signed in. Stamping readings with the
+// account UUID is what lets a window that straddles a switch be spotted instead
+// of silently averaging two accounts' rates together.
+async function claudeAccountIdentity(configDir) {
+  try {
+    const data = JSON.parse(await readFile(path.join(configDir, '.claude.json'), 'utf8'));
+    const uuid = data.oauthAccount?.accountUuid || data.cachedUsageUtilization?.accountUuid;
+    if (!uuid) return null;
+    return { accountUuid: uuid, organizationName: data.oauthAccount?.organizationName || null };
+  } catch {
+    return null;
+  }
+}
+
+async function withClaudeIdentity(account, limitsPromise) {
+  const [limits, identity] = await Promise.all([limitsPromise, claudeAccountIdentity(account.configDir)]);
+  if (!limits || !identity) return limits;
+  return { ...limits, ...identity };
+}
+
 async function getClaudeRateLimits(account, force = false) {
   if (!force) {
-    return getCachedClaudeRateLimits(account);
+    return withClaudeIdentity(account, getCachedClaudeRateLimits(account));
   }
   const now = Date.now();
   if (now - (lastLiveAttemptAt.get(account.id) || 0) < LIMITS_REFRESH_BACKOFF_MS) {
-    return getCachedClaudeRateLimits(account);
+    return withClaudeIdentity(account, getCachedClaudeRateLimits(account));
   }
   lastLiveAttemptAt.set(account.id, now);
   try {
     const raw = await readFile(path.join(account.configDir, '.credentials.json'), 'utf8');
     const accessToken = JSON.parse(raw).claudeAiOauth?.accessToken;
     if (!accessToken) throw new Error('no access token');
-    return await fetchLiveClaudeRateLimits(accessToken);
+    return await withClaudeIdentity(account, fetchLiveClaudeRateLimits(accessToken));
   } catch {
-    return getCachedClaudeRateLimits(account);
+    return withClaudeIdentity(account, getCachedClaudeRateLimits(account));
   }
 }
 

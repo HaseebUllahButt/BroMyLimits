@@ -102,6 +102,8 @@ function materiallyDifferent(prev, next) {
   // grow the file by megabytes a week for no extra resolution.
   if (prev.pct !== next.pct) return true;
   if (prev.cycle !== next.cycle) return true;
+  // A changed login mid-window is exactly the event worth having on record.
+  if (prev.who !== next.who) return true;
   // A heartbeat keeps long idle stretches visible as flat time rather than as
   // a gap, and re-anchors the counters if a percentage never moves.
   return Date.parse(next.t) - Date.parse(prev.t) > HEARTBEAT_MS;
@@ -141,6 +143,10 @@ async function recordSnapshot(usage) {
         cycle: cycleIdFor(w.resetsAt),
         tok,
         cost,
+        // Which login produced this reading, where the provider exposes one. A
+        // profile survives a re-authentication, so this is the only thing that
+        // distinguishes readings taken before and after one.
+        ...(acct.rateLimits.accountUuid ? { who: acct.rateLimits.accountUuid } : {}),
       };
       const key = `${row.acct}|${row.win}`;
       if (!materiallyDifferent(lastWritten.get(key), row)) continue;
@@ -521,7 +527,11 @@ async function analyze({ maxStepsPerWindow = 400 } = {}) {
           continue;
         }
         candidates.sort((a, b) => b.pctSpan - a.pctSpan);
-        cycles.push(candidates[0]);
+        // More than one login inside a window means its token counters and its
+        // percentages do not describe the same account throughout, so the rate
+        // derived from it is not trustworthy without saying so.
+        const logins = [...new Set(cycleRows.map((r) => r.who).filter(Boolean))];
+        cycles.push({ ...candidates[0], logins, mixedLogins: logins.length > 1 });
       }
       cycles.sort((a, b) => String(b.to).localeCompare(String(a.to)));
 

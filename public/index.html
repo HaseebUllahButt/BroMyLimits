@@ -877,53 +877,40 @@
     .card-title { font-size: 0.67rem; }
   }
   /* --- Limit economics ---------------------------------------------------
-     What one percent of a rate-limit window costs, per account and window. */
+     Cards reuse the app's own vocabulary — .card, .limits-head, .card-title,
+     .stat-row/.stat, .limit-item's meter — so only the pieces with no existing
+     equivalent (the rate headline, the plot, its tooltip) are defined here. */
   .eco-scroll {
     flex: 1;
     min-height: 0;
     overflow-y: auto;
     overscroll-behavior: contain;
-    /* Room for the scrollbar so it never sits on top of a card's edge. */
     padding-right: 0.35rem;
   }
-  .eco-note {
-    color: var(--ink-dim);
-    font-size: 0.78rem;
-    margin: 0 0 0.75rem;
-    line-height: 1.5;
-  }
-  .eco-card + .eco-card { margin-top: 0.7rem; }
-  .eco-head {
+  .eco-card + .eco-card { margin-top: 0.6rem; }
+  .eco-top {
     display: flex;
-    align-items: baseline;
+    align-items: flex-end;
     justify-content: space-between;
-    gap: 0.75rem;
-    flex-wrap: wrap;
-    margin-bottom: 0.6rem;
-  }
-  .eco-title {
-    font-size: 0.72rem;
-    font-weight: 600;
-    letter-spacing: 0.07em;
-    text-transform: uppercase;
-    color: var(--ink-dim);
-    margin: 0;
-  }
-  .eco-title .eco-acct { color: var(--ink); }
-  .eco-hero {
-    display: flex;
-    align-items: baseline;
-    gap: 0.5rem;
+    gap: 1rem;
     flex-wrap: wrap;
   }
-  .eco-hero-val {
+  .eco-rate { display: flex; align-items: baseline; gap: 0.35rem; flex-wrap: wrap; }
+  .eco-rate .value {
     font-family: var(--mono);
-    font-size: 1.45rem;
-    font-weight: 600;
-    color: var(--ink);
-    line-height: 1.1;
+    /* One step above .stat .value — the headline of the card, still on the
+       app's type scale rather than a size invented for this panel. */
+    font-size: 1.35rem;
+    font-weight: 500;
+    letter-spacing: -0.03em;
+    font-variant-numeric: tabular-nums;
+    line-height: 1.15;
   }
-  .eco-hero-unit { color: var(--ink-dim); font-size: 0.8rem; }
+  .eco-rate .unit {
+    color: var(--ink-dim);
+    font-size: 0.74rem;
+    letter-spacing: 0.01em;
+  }
   .eco-badge {
     font-size: 0.6rem;
     letter-spacing: 0.06em;
@@ -931,56 +918,16 @@
     color: var(--ink-dim);
     border: 1px dashed var(--border-strong);
     border-radius: 999px;
-    padding: 0.1rem 0.4rem;
+    padding: 0.08rem 0.4rem;
   }
-  .eco-sub { color: var(--ink-dim); font-size: 0.75rem; margin-top: 0.15rem; }
-  .eco-facts {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
-    gap: 0.5rem;
-    margin: 0.7rem 0 0.2rem;
-  }
-  .eco-fact {
-    background: var(--surface-2);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 0.5rem 0.6rem;
-  }
-  .eco-fact .label {
-    display: block;
-    font-size: 0.63rem;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    color: var(--ink-faint);
-    margin-bottom: 0.2rem;
-  }
-  .eco-fact .value {
-    font-family: var(--mono);
-    font-size: 0.92rem;
-    color: var(--ink);
-  }
-  .eco-meter {
-    height: 7px;
-    border-radius: 4px;
-    background: var(--surface-3);
-    overflow: hidden;
-    margin-top: 0.55rem;
-  }
-  .eco-meter-fill {
-    height: 100%;
-    border-radius: 4px;
-    background: var(--eco-accent, var(--accent));
-    transition: width 0.4s var(--ease);
-  }
-  .eco-toolbar {
-    display: flex;
-    gap: 0.3rem;
-    align-items: center;
-  }
+  .eco-why { margin: 0.25rem 0 0; font-size: 0.71rem; line-height: 1.4; color: var(--ink-dim); }
+  .eco-flag { color: var(--warn); }
+  .eco-meter { min-width: 190px; flex: 1; max-width: 340px; }
+  .eco-toolbar { display: flex; gap: 0.25rem; }
   .eco-toggle {
     font: inherit;
-    font-size: 0.7rem;
-    padding: 0.2rem 0.55rem;
+    font-size: 0.68rem;
+    padding: 0.15rem 0.5rem;
     border-radius: 999px;
     border: 1px solid var(--border);
     background: var(--surface-2);
@@ -993,34 +940,26 @@
     color: var(--surface);
     font-weight: 600;
   }
-  .eco-chart-wrap { position: relative; margin-top: 0.9rem; }
+  .eco-card .stat-row { grid-template-columns: repeat(3, minmax(0, 1fr)); margin-top: 0.7rem; }
+  .eco-card .stat { background: var(--surface-2); box-shadow: none; padding: 0.5rem 0.65rem; }
+  .eco-card .stat .value { font-size: 1rem; }
+  .eco-chart-wrap { position: relative; margin-top: 0.75rem; }
   .eco-chart-caption {
-    margin: 0 0 0.3rem;
-    font-size: 0.63rem;
+    margin: 0 0 0.15rem;
+    font-size: 0.62rem;
     letter-spacing: 0.06em;
     text-transform: uppercase;
     color: var(--ink-faint);
   }
-  /* Height follows the viewBox so the plot spans the card's full width rather
-     than letterboxing inside a fixed height. */
+  /* Height follows the viewBox so the plot spans the card's full width. */
   .eco-chart { width: 100%; height: auto; display: block; overflow: visible; }
   .eco-grid-line { stroke: var(--border); stroke-width: 1; }
-  .eco-grid-text {
-    fill: var(--ink-faint);
-    font-size: 9px;
-    font-family: var(--mono);
-  }
-  .eco-x-text { fill: var(--ink-faint); font-size: 9px; }
+  .eco-axis-text { fill: var(--ink-faint); font-size: 9px; font-family: var(--mono); }
   .eco-bar { fill: var(--eco-accent, var(--accent)); transition: opacity 0.15s var(--ease); }
-  .eco-bar-hit { fill: transparent; cursor: pointer; }
-  .eco-chart-wrap.hovering .eco-bar { opacity: 0.4; }
+  .eco-hit { fill: transparent; cursor: pointer; }
+  .eco-chart-wrap.hovering .eco-bar { opacity: 0.35; }
   .eco-chart-wrap.hovering .eco-bar.hot { opacity: 1; }
-  .eco-bar-label {
-    fill: var(--ink-soft);
-    font-size: 9.5px;
-    font-family: var(--mono);
-    text-anchor: middle;
-  }
+  .eco-mark-text { fill: var(--ink-soft); font-size: 10px; font-family: var(--mono); text-anchor: middle; }
   .eco-tip {
     position: absolute;
     pointer-events: none;
@@ -1028,40 +967,43 @@
     border: 1px solid var(--border-strong);
     border-radius: var(--radius);
     box-shadow: var(--shadow-sm);
-    padding: 0.4rem 0.55rem;
-    font-size: 0.72rem;
+    padding: 0.35rem 0.5rem;
+    font-size: 0.71rem;
     color: var(--ink);
     white-space: nowrap;
     opacity: 0;
-    transform: translate(-50%, -108%);
+    transform: translate(-50%, -112%);
     transition: opacity 0.12s var(--ease);
     z-index: 5;
   }
   .eco-tip.show { opacity: 1; }
-  .eco-tip b { font-family: var(--mono); font-weight: 600; }
-  .eco-tip span { color: var(--ink-dim); }
-  .eco-table { width: 100%; border-collapse: collapse; font-size: 0.75rem; }
+  .eco-table { width: 100%; border-collapse: collapse; font-size: 0.73rem; }
   .eco-table th {
     text-align: right;
-    font-size: 0.63rem;
+    font-size: 0.61rem;
     letter-spacing: 0.06em;
     text-transform: uppercase;
     color: var(--ink-faint);
     font-weight: 600;
-    padding: 0.3rem 0.4rem;
+    padding: 0.25rem 0.35rem;
     border-bottom: 1px solid var(--border);
   }
   .eco-table th:first-child, .eco-table td:first-child { text-align: left; }
   .eco-table td {
     text-align: right;
-    padding: 0.3rem 0.4rem;
+    padding: 0.25rem 0.35rem;
     border-bottom: 1px solid var(--border);
     font-family: var(--mono);
     color: var(--ink-soft);
+    font-variant-numeric: tabular-nums;
   }
   .eco-table tr:last-child td { border-bottom: 0; }
-  .eco-table td.partial { color: var(--ink-faint); }
-  .eco-empty { color: var(--ink-dim); font-size: 0.78rem; padding: 0.4rem 0; }
+  .eco-table td.dim { color: var(--ink-faint); }
+  .eco-empty { color: var(--ink-dim); font-size: 0.76rem; padding: 0.35rem 0 0; }
+  @media (max-width: 640px) {
+    .eco-card .stat-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .eco-meter { max-width: none; }
+  }
 </style>
 </head>
 <body>
@@ -1672,12 +1614,20 @@ document.getElementById('tabs').addEventListener('click', (e) => {
 
 let limitHistoryData = null;
 
+// Kept to the two accounts actually being watched. Everything else still lands
+// in the ledger untouched; this only decides what the panel draws.
+const ECO_ACCOUNTS = ['claude-personal', 'codex-default'];
+
+// Percentages arrive as whole numbers, so a rate measured across only a point
+// or two carries up to ±50% quantisation error. Below this many measured
+// points a seven-day estimate is the better answer where one is available.
+const ECO_MIN_PCT = 5;
+
 const ecoMetricOf = () => localStorage.getItem('ccu-eco-metric') === 'tokens' ? 'tokens' : 'cost';
 const ecoSetMetric = (m) => localStorage.setItem('ccu-eco-metric', m);
 
-const ecoRateValue = (o, metric) => o ? (metric === 'tokens' ? o.tokensPerPct : o.costPerPct) : null;
-const ecoTotalValue = (o, metric) => o ? (metric === 'tokens' ? o.tokens : o.cost) : null;
-const ecoFullValue = (o, metric) => o ? (metric === 'tokens' ? o.projectedTokensAt100 : o.projectedCostAt100) : null;
+const ecoRate = (o, metric) => o ? (metric === 'tokens' ? o.tokensPerPct : o.costPerPct) : null;
+const ecoTotal = (o, metric) => o ? (metric === 'tokens' ? o.tokens : o.cost) : null;
 
 // Per-percent dollar figures are often well under a cent, where two decimals
 // would round every window to the same number.
@@ -1685,157 +1635,184 @@ const ecoFmt = (v, metric) => v == null
   ? '—'
   : metric === 'tokens' ? fmtTok(v) : (v >= 0.1 ? fmt$(v) : fmt$4(v));
 
-const ecoShortDate = (iso) => {
-  if (!iso) return '—';
-  const d = new Date(iso);
-  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-};
-
-// A single-series bar chart: one bar per limit window the ledger has watched,
-// oldest to newest, so a rate that drifts (a plan change, a shift in which
-// models get used) shows up as a change in bar height.
-function ecoBarChart(cycles, metric, key) {
-  const rows = cycles
-    .filter(c => ecoRateValue(c, metric) != null && ecoRateValue(c, metric) > 0)
-    .slice()
-    .reverse();
-  if (rows.length < 2) {
-    return `<p class="eco-empty">${rows.length ? 'One window measured so far — a second is needed before the trend means anything.' : 'No completed measurement yet.'}</p>`;
-  }
-
-  const W = 640, H = 168;
-  const padL = 52, padR = 10, padT = 18, padB = 24;
-  const plotW = W - padL - padR;
-  const plotH = H - padT - padB;
-  const values = rows.map(c => ecoRateValue(c, metric));
-  const max = Math.max(...values);
-  const top = max * 1.15;
-  const y = v => padT + plotH - (v / top) * plotH;
-  const slot = plotW / rows.length;
-  const barW = Math.max(6, Math.min(46, slot - 8));
-
-  const ticks = [0, top / 2, top];
-  const grid = ticks.map(t => `
-    <line class="eco-grid-line" x1="${padL}" x2="${W - padR}" y1="${y(t).toFixed(1)}" y2="${y(t).toFixed(1)}"></line>
-    <text class="eco-grid-text" x="${padL - 6}" y="${(y(t) + 3).toFixed(1)}" text-anchor="end">${t === 0 ? '0' : ecoFmt(t, metric)}</text>`).join('');
-
-  const maxIdx = values.indexOf(max);
-  const bars = rows.map((c, i) => {
-    const v = values[i];
-    const x = padL + i * slot + (slot - barW) / 2;
-    const yTop = y(v);
-    const h = Math.max(2, padT + plotH - yTop);
-    const r = Math.min(4, barW / 2, h);
-    // Rounded top corners only: the baseline end stays square on the axis.
-    const d = `M${x.toFixed(1)} ${(yTop + h).toFixed(1)} V${(yTop + r).toFixed(1)} Q${x.toFixed(1)} ${yTop.toFixed(1)} ${(x + r).toFixed(1)} ${yTop.toFixed(1)} H${(x + barW - r).toFixed(1)} Q${(x + barW).toFixed(1)} ${yTop.toFixed(1)} ${(x + barW).toFixed(1)} ${(yTop + r).toFixed(1)} V${(yTop + h).toFixed(1)} Z`;
-    // Only the peak and the newest window are labelled directly; the table
-    // below carries every value.
-    const label = (i === maxIdx || i === rows.length - 1)
-      ? `<text class="eco-bar-label" x="${(x + barW / 2).toFixed(1)}" y="${(yTop - 5).toFixed(1)}">${ecoFmt(v, metric)}</text>`
-      : '';
-    const xLabel = (rows.length <= 8 || i % 2 === 0)
-      ? `<text class="eco-x-text" x="${(x + barW / 2).toFixed(1)}" y="${H - 8}" text-anchor="middle">${ecoShortDate(c.to)}</text>`
-      : '';
-    const tip = `${ecoFmt(v, metric)} per 1%  ·  ${c.pctStart}→${c.pctEnd}%  ·  ${fmtTok(c.tokens)} / ${fmt$(c.cost)}  ·  window to ${ecoShortDate(c.to)}`;
-    return `<g><path class="eco-bar" data-eco-bar="${key}-${i}" d="${d}"></path>${label}${xLabel}
-      <rect class="eco-bar-hit" data-eco-key="${key}-${i}" data-eco-tip="${esc(tip)}" x="${(padL + i * slot).toFixed(1)}" y="${padT}" width="${slot.toFixed(1)}" height="${plotH}"></rect></g>`;
-  }).join('');
-
-  const measure = metric === 'tokens' ? 'Tokens per 1%' : 'Dollars per 1%';
-  return `<div class="eco-chart-wrap" data-eco-chart="${key}">
-    <p class="eco-chart-caption">${measure}, by window</p>
-    <svg class="eco-chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="${measure} of the limit, one bar per window">${grid}${bars}</svg>
-    <div class="eco-tip" data-eco-tipbox="${key}"></div>
-  </div>`;
-}
+const ecoDate = (iso) => iso
+  ? new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+  : '—';
 
 // A seven-day window and the "last 7 days" totals cover very nearly the same
 // span, so their ratio approximates the per-percent rate before the ledger has
-// watched a percentage move — useful on day one, when the measured series for
-// everything but Codex is still empty. It only holds where one window governs
-// the account's whole usage: Antigravity splits one token pool across separate
-// Gemini and Claude/GPT quotas, so no single percentage explains its totals.
+// watched a percentage move. It only holds where one window governs the
+// account's whole usage, which is why callers pass `allowed`.
 function ecoEstimate(account, win, metric, allowed) {
   const pct = win.latest?.pct ?? 0;
   if (!allowed || pct <= 0 || !account.last7d) return null;
   const total = metric === 'tokens' ? account.last7d.tokens : account.last7d.cost;
-  if (!total) return null;
-  return total / pct;
+  return total ? total / pct : null;
 }
 
-function ecoWindowCard(account, win, metric, allowEstimate) {
+const ECO_W = 640;
+const ECO_H = 150;
+const ECO_PAD = { l: 52, r: 12, t: 16, b: 22 };
+const ECO_PLOT_W = ECO_W - ECO_PAD.l - ECO_PAD.r;
+const ECO_PLOT_H = ECO_H - ECO_PAD.t - ECO_PAD.b;
+
+function ecoAxis(ticks, metric) {
+  return ticks.map(({ v, y }) => `
+    <line class="eco-grid-line" x1="${ECO_PAD.l}" x2="${ECO_W - ECO_PAD.r}" y1="${y.toFixed(1)}" y2="${y.toFixed(1)}"></line>
+    <text class="eco-axis-text" x="${ECO_PAD.l - 6}" y="${(y + 3).toFixed(1)}" text-anchor="end">${v === 0 ? '0' : ecoFmt(v, metric)}</text>`).join('');
+}
+
+function ecoChartFrame(key, caption, body) {
+  return `<div class="eco-chart-wrap" data-eco-chart="${key}">
+    <p class="eco-chart-caption">${caption}</p>
+    <svg class="eco-chart" viewBox="0 0 ${ECO_W} ${ECO_H}" role="img" aria-label="${esc(caption)}">${body}</svg>
+    <div class="eco-tip"></div>
+  </div>`;
+}
+
+// One chart form for every card: bars of what a single percentage point cost.
+// Only the x-unit adapts — a completed window where several exist, otherwise
+// each individual percentage tick — so Codex's months of history and Claude's
+// first few points are read exactly the same way.
+function ecoBars(items, metric, key, caption) {
+  const values = items.map(i => i.value);
+  const peak = Math.max(...values);
+  const top = peak * 1.15;
+  const y = v => ECO_PAD.t + ECO_PLOT_H - (v / top) * ECO_PLOT_H;
+  // A handful of bars spread across the full width reads as a sparse chart
+  // rather than a filling one, so short series keep a fixed column width and
+  // grow rightwards into the empty space.
+  const slot = Math.min(ECO_PLOT_W / items.length, items.length < 6 ? 64 : Infinity);
+  const barW = Math.max(6, Math.min(44, slot - 8));
+  const peakIdx = values.indexOf(peak);
+
+  const bars = items.map((item, i) => {
+    const x = ECO_PAD.l + i * slot + (slot - barW) / 2;
+    const yTop = y(item.value);
+    const h = Math.max(2, ECO_PAD.t + ECO_PLOT_H - yTop);
+    const r = Math.min(4, barW / 2, h);
+    // Rounded top corners only — the baseline end stays square on the axis.
+    const d = `M${x.toFixed(1)} ${(yTop + h).toFixed(1)} V${(yTop + r).toFixed(1)} Q${x.toFixed(1)} ${yTop.toFixed(1)} ${(x + r).toFixed(1)} ${yTop.toFixed(1)} H${(x + barW - r).toFixed(1)} Q${(x + barW).toFixed(1)} ${yTop.toFixed(1)} ${(x + barW).toFixed(1)} ${(yTop + r).toFixed(1)} V${(yTop + h).toFixed(1)} Z`;
+    // Only the peak and the newest bar are labelled; the table carries the rest.
+    const label = (i === peakIdx || i === items.length - 1)
+      ? `<text class="eco-mark-text" x="${(x + barW / 2).toFixed(1)}" y="${(yTop - 5).toFixed(1)}">${ecoFmt(item.value, metric)}</text>`
+      : '';
+    const xLabel = (items.length <= 8 || i % 2 === 0)
+      ? `<text class="eco-axis-text" x="${(x + barW / 2).toFixed(1)}" y="${ECO_H - 7}" text-anchor="middle">${item.x}</text>`
+      : '';
+    return `<g><path class="eco-bar" data-eco-bar="${key}-${i}" d="${d}"></path>${label}${xLabel}
+      <rect class="eco-hit" data-eco-key="${key}-${i}" data-eco-tip="${esc(item.tip)}" x="${(ECO_PAD.l + i * slot).toFixed(1)}" y="${ECO_PAD.t}" width="${slot.toFixed(1)}" height="${ECO_PLOT_H}"></rect></g>`;
+  }).join('');
+
+  const ticks = [0, top / 2, top].map(v => ({ v, y: y(v) }));
+  return ecoChartFrame(key, caption, ecoAxis(ticks, metric) + bars);
+}
+
+// Long histories are summarised one bar per window; a window still filling up
+// is broken out tick by tick so there is something to read on day one.
+const ECO_MAX_TICKS = 24;
+
+function ecoChart(win, metric, key) {
+  const unit = metric === 'tokens' ? 'Tokens' : 'Dollars';
+  const windows = win.cycles.filter(c => ecoRate(c, metric) > 0);
+  if (windows.length >= 2) {
+    const items = windows.slice().reverse().map(c => ({
+      value: ecoRate(c, metric),
+      x: ecoDate(c.to),
+      tip: `${ecoFmt(ecoRate(c, metric), metric)} per 1% · ${c.pctStart}→${c.pctEnd}% · ${fmtTok(c.tokens)} / ${fmt$(c.cost)}`,
+    }));
+    return ecoBars(items, metric, key, `${unit} per 1%, by window`);
+  }
+  const steps = (win.steps || []).slice(-ECO_MAX_TICKS);
+  if (steps.length) {
+    const items = steps.map(s => ({
+      value: metric === 'tokens' ? s.tokensPerPct : s.costPerPct,
+      x: `${s.toPct}%`,
+      tip: `${s.fromPct}→${s.toPct}% · ${fmtTok(s.tokens)} / ${fmt$(s.cost)} · ${ecoDate(s.t)}`,
+    }));
+    // "Completed" matters: a bar covers the spend that carried one point to the
+    // next, while the headline rate also counts spend sitting on the current
+    // point, so the two only converge as points accumulate.
+    return ecoBars(items, metric, key, `${unit} per 1%, by completed percentage point`);
+  }
+  return '<p class="eco-empty">Nothing plotted yet — the first bar appears once the percentage moves.</p>';
+}
+
+function ecoCard(account, win, metric, allowEstimate) {
   const key = `${account.id}--${win.key}`;
   const pooled = win.lifetime;
   const current = win.current;
-  const accent = `var(${accentVar(account.provider)})`;
-  const measured = ecoRateValue(pooled, metric);
+  const measured = ecoRate(pooled, metric);
   const estimate = ecoEstimate(account, win, metric, allowEstimate);
-  const pct = win.latest?.pct ?? 0;
-
-  // Percentages arrive as whole numbers, so a rate measured across only a
-  // point or two carries up to ±50% quantisation error — enough to disagree
-  // with reality by a factor of two. Below this many measured points the
-  // seven-day estimate is the better answer, and the measurement is shown
-  // beside it as provisional rather than presented as the headline.
-  const MEASURED_MIN_PCT = 5;
-  const measuredPts = pooled ? pooled.pct : 0;
-  const trusted = measured != null && measuredPts >= MEASURED_MIN_PCT;
+  const pts = pooled ? pooled.pct : 0;
+  const trusted = measured != null && pts >= ECO_MIN_PCT;
   const rate = trusted ? measured : (estimate != null ? estimate : measured);
   const mode = trusted ? 'measured' : (estimate != null ? 'estimated' : (measured != null ? 'provisional' : 'none'));
+  const pct = win.latest?.pct ?? 0;
+  const barCls = pct >= 90 ? 'bad' : pct >= 70 ? 'warn' : '';
 
-  const facts = [
-    ...(mode === 'estimated' && measured != null
-      ? [[`Measured so far (${Math.round(measuredPts)} pt${Math.round(measuredPts) === 1 ? '' : 's'})`, ecoFmt(measured, metric)]]
-      : []),
-    ...(mode === 'measured' && estimate != null
-      ? [['Estimate from last 7d', ecoFmt(estimate, metric)]]
-      : []),
-    ['Full window at this rate', ecoFmt(rate != null ? rate * 100 : null, metric)],
-    ['This window so far', current && current.pctSpan > 0
-      ? `${ecoFmt(ecoTotalValue(current, metric), metric)} over ${current.pctSpan}%`
-      : '—'],
-    ['Rate this window', ecoFmt(ecoRateValue(current, metric), metric)],
-    ['Windows measured', pooled ? String(pooled.cycles) : '0'],
-  ].map(([label, value]) => `<div class="eco-fact"><span class="label">${esc(label)}</span><span class="value">${esc(value)}</span></div>`).join('');
+  const why = {
+    measured: () => `measured across ${pooled.cycles} window${pooled.cycles === 1 ? '' : 's'} and ${Math.round(pts)} percentage points`,
+    estimated: () => `last 7 days ÷ ${pct}% consumed — a measured rate takes over past ${ECO_MIN_PCT} points`,
+    provisional: () => `only ${Math.round(pts)} point${Math.round(pts) === 1 ? '' : 's'} measured — whole-number percentages make this imprecise so far`,
+    none: () => 'no rate yet — it appears once the percentage moves',
+  }[mode]();
 
-  const table = win.cycles.filter(c => c.samples > 1).map(c => `
-    <tr>
-      <td>${ecoShortDate(c.from)} – ${ecoShortDate(c.to)}</td>
-      <td class="${c.partial ? 'partial' : ''}">${c.pctStart}→${c.pctEnd}%</td>
-      <td>${fmtTok(c.tokens)}</td>
-      <td>${fmt$(c.cost)}</td>
-      <td>${ecoFmt(c.tokensPerPct, 'tokens')}</td>
-      <td>${ecoFmt(c.costPerPct, 'cost')}</td>
-    </tr>`).join('');
+  const stats = [
+    { label: 'Full window', value: ecoFmt(rate != null ? rate * 100 : null, metric), sub: 'at this rate' },
+    {
+      label: 'This window',
+      value: current && current.pctSpan > 0 ? ecoFmt(ecoTotal(current, metric), metric) : '—',
+      sub: current && current.pctSpan > 0 ? `over ${current.pctSpan}%` : 'not moved yet',
+    },
+    mode === 'estimated' && measured != null
+      ? { label: 'Measured', value: ecoFmt(measured, metric), sub: `${Math.round(pts)} pt${Math.round(pts) === 1 ? '' : 's'} so far` }
+      : mode === 'measured' && estimate != null
+        ? { label: 'Cross-check', value: ecoFmt(estimate, metric), sub: 'from last 7 days' }
+        : { label: 'Windows seen', value: pooled ? String(pooled.cycles) : '0', sub: 'with a measurable rate' },
+  ];
 
-  return `<div class="card eco-card" style="--eco-accent:${accent}">
-    <div class="eco-head">
-      <div>
-        <p class="eco-title"><span class="eco-acct">${esc(accountTitle(account))}</span> · ${esc(win.label)}</p>
-        <div class="eco-hero">
-          <span class="eco-hero-val">${ecoFmt(rate, metric)}</span>
-          <span class="eco-hero-unit">per 1% of this limit</span>
-          ${mode === 'measured' ? '' : mode === 'none' ? '' : `<span class="eco-badge">${mode}</span>`}
-        </div>
-        <p class="eco-sub">${{
-          measured: () => `pooled over ${pooled.cycles} window${pooled.cycles === 1 ? '' : 's'} and ${Math.round(measuredPts)} measured percentage points`,
-          estimated: () => `last 7 days of usage divided by ${pct}% consumed — the measured rate takes over past ${MEASURED_MIN_PCT} percentage points`,
-          provisional: () => `only ${Math.round(measuredPts)} percentage point${measuredPts === 1 ? '' : 's'} measured so far — whole-number percentages make this imprecise until more accumulate`,
-          none: () => 'not enough samples yet — the rate appears once the percentage moves',
-        }[mode]()}</p>
-      </div>
+  const rows = win.cycles.filter(c => ecoRate(c, metric) > 0);
+  const table = rows.length >= 2 ? `<div class="table-scroll"><table class="eco-table">
+      <thead><tr><th>Window</th><th>Span</th><th>Tokens</th><th>Cost</th><th>Tok / 1%</th><th>$ / 1%</th></tr></thead>
+      <tbody>${rows.map(c => `<tr>
+        <td>${ecoDate(c.from)} – ${ecoDate(c.to)}</td>
+        <td class="${c.partial ? 'dim' : ''}">${c.pctStart}→${c.pctEnd}%</td>
+        <td>${fmtTok(c.tokens)}</td>
+        <td>${fmt$(c.cost)}</td>
+        <td>${ecoFmt(c.tokensPerPct, 'tokens')}</td>
+        <td>${ecoFmt(c.costPerPct, 'cost')}</td>
+      </tr>`).join('')}</tbody></table></div>` : '';
+
+  return `<div class="card eco-card" style="--eco-accent:var(${accentVar(account.provider)})">
+    <div class="limits-head">
+      <h2 class="card-title">${esc(accountTitle(account))} · ${esc(win.label)}</h2>
       <div class="eco-toolbar">
         <button class="eco-toggle${metric === 'tokens' ? ' active' : ''}" data-eco-metric="tokens">Tokens</button>
         <button class="eco-toggle${metric === 'cost' ? ' active' : ''}" data-eco-metric="cost">Dollars</button>
       </div>
     </div>
-    <div class="eco-meter" title="${pct}% consumed"><div class="eco-meter-fill" style="width:${Math.min(100, pct)}%"></div></div>
-    <p class="eco-sub">${pct}% consumed${win.latest?.resetsAt ? ` · ${fmtResetsAt(win.latest.resetsAt)}` : ''}</p>
-    <div class="eco-facts">${facts}</div>
-    ${ecoBarChart(win.cycles, metric, key)}
-    ${table ? `<div class="table-scroll"><table class="eco-table">
-      <thead><tr><th>Window</th><th>Span</th><th>Tokens</th><th>Cost</th><th>Tokens / 1%</th><th>$ / 1%</th></tr></thead>
-      <tbody>${table}</tbody></table></div>` : ''}
+    <div class="eco-top">
+      <div>
+        <div class="eco-rate">
+          <span class="value">${ecoFmt(rate, metric)}</span>
+          <span class="unit">per 1%</span>
+          ${mode === 'measured' || mode === 'none' ? '' : `<span class="eco-badge">${mode}</span>`}
+        </div>
+        <p class="eco-why">${why}${current && current.mixedLogins
+          ? ' · <span class="eco-flag">two logins seen in this window — its rate mixes both</span>'
+          : ''}</p>
+      </div>
+      <div class="limit-item eco-meter">
+        <div class="head"><span>consumed</span><span class="pct">${pct}%</span></div>
+        <div class="bar-track"><div class="bar-fill ${barCls}" style="width:${Math.min(100, pct)}%"></div></div>
+        <div class="reset">${win.latest?.resetsAt ? fmtResetsAt(win.latest.resetsAt) : ''}</div>
+      </div>
+    </div>
+    <div class="stat-row">${stats.map(s => `
+      <div class="stat"><div class="label">${s.label}</div><div class="value">${s.value}</div><div class="sub">${s.sub}</div></div>`).join('')}</div>
+    ${ecoChart(win, metric, key)}
+    ${table}
   </div>`;
 }
 
@@ -1846,39 +1823,28 @@ function limitEconomicsHtml(history) {
   const byId = new Map((lastAllAccounts || []).map(a => [a.id, a]));
 
   const cards = [];
-  for (const entry of history.accounts || []) {
+  for (const entry of (history.accounts || []).filter(e => ECO_ACCOUNTS.includes(e.id))) {
     const account = byId.get(entry.id) || { id: entry.id, provider: entry.provider, label: entry.id };
-    const soleWeekly = entry.windows.filter(w => /weekly/.test(w.key)).length === 1;
-    // Windows that have actually produced a rate lead; the rest still render so
-    // it is obvious they are being watched and simply have no slope yet.
-    const windows = entry.windows.slice().sort((a, b) => (b.lifetime ? 1 : 0) - (a.lifetime ? 1 : 0));
-    for (const win of windows) {
-      const allowEstimate = soleWeekly && /weekly/.test(win.key);
-      cards.push({
-        hasRate: !!win.lifetime || allowEstimate,
-        html: ecoWindowCard(account, win, metric, allowEstimate),
-      });
-    }
+    // The seven-day estimate needs one window to govern the account's whole
+    // usage; an account split across several weekly quotas has no single
+    // percentage that explains its totals.
+    // One card per account: the weekly window, which is the limit that bites.
+    // The estimate needs that window to govern the account's whole usage.
+    const weekly = entry.windows.filter(w => /weekly/.test(w.key));
+    if (weekly.length !== 1) continue;
+    cards.push({ acct: entry.id, html: ecoCard(account, weekly[0], metric, true) });
   }
-  cards.sort((a, b) => (b.hasRate ? 1 : 0) - (a.hasRate ? 1 : 0));
-
-  const backfill = history.backfill;
-  const note = `Every reading of a limit percentage is stored with the token and dollar counters
-    standing at that moment; the rate below is the slope between readings inside one window.
-    ${backfill && backfill.rows ? `Codex history was reconstructed from ${backfill.files} local transcripts back to ${ecoShortDate(backfill.from)} — its rollouts are the only local record that kept past percentages.` : ''}
-    Claude, Grok and Antigravity keep no such record, so their series starts when this began sampling${history.firstSampleAt ? '' : ''}.`;
+  cards.sort((a, b) => ECO_ACCOUNTS.indexOf(a.acct) - ECO_ACCOUNTS.indexOf(b.acct));
 
   // The shell is a fixed-height layout with every panel set to overflow:hidden,
-  // so this panel — a list of cards that is taller than the viewport by design
-  // — carries its own scroll region. The heading stays pinned above it.
+  // so this panel carries its own scroll region under a pinned heading.
   return `<div class="panel-heading">Limit economics</div>
     <div class="eco-scroll">
-      <p class="eco-note">${note}</p>
       ${cards.length ? cards.map(c => c.html).join('') : '<p class="empty">No limit readings recorded yet.</p>'}
     </div>`;
 }
 
-// Metric toggle and bar hover, delegated so re-renders need no rebinding.
+// Metric toggle and chart hover, delegated so re-renders need no rebinding.
 document.addEventListener('click', (e) => {
   const btn = e.target.closest('[data-eco-metric]');
   if (!btn) return;
@@ -1896,18 +1862,18 @@ document.addEventListener('mousemove', (e) => {
     }
   });
   if (!wrap) return;
+  const tip = wrap.querySelector('.eco-tip');
   if (!hit) {
     wrap.classList.remove('hovering');
-    wrap.querySelector('.eco-tip')?.classList.remove('show');
+    tip?.classList.remove('show');
     return;
   }
   wrap.classList.add('hovering');
-  wrap.querySelectorAll('.eco-bar').forEach(b => b.classList.toggle('hot', b.dataset.ecoBar === hit.dataset.ecoKey));
-  const tip = wrap.querySelector('.eco-tip');
+  wrap.querySelectorAll('.eco-bar').forEach(bar => bar.classList.toggle('hot', bar.dataset.ecoBar === hit.dataset.ecoKey));
   if (!tip) return;
   const box = wrap.getBoundingClientRect();
   tip.textContent = hit.dataset.ecoTip;
-  tip.style.left = Math.max(60, Math.min(box.width - 60, e.clientX - box.left)) + 'px';
+  tip.style.left = Math.max(70, Math.min(box.width - 70, e.clientX - box.left)) + 'px';
   tip.style.top = (e.clientY - box.top) + 'px';
   tip.classList.add('show');
 });
@@ -1926,7 +1892,6 @@ async function loadLimitHistory() {
   }
   renderLimitEconomics();
 }
-
 function ensureLayout(allAccounts, visibleAccounts) {
   const missingEl = visibleAccounts.some(a => !document.getElementById(`stats-${a.id}`) || !document.getElementById(`models-${a.id}`));
   const key = allAccounts.map(a => a.id).join(',') + '|' + [...getHidden()].sort().join(',');
