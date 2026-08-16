@@ -40,6 +40,45 @@ To remove the installed service and restore backed-up Claude settings:
 ./uninstall.sh
 ```
 
+## Limit economics
+
+Providers tell you what percentage of a rate-limit window you have burned, but
+never what that percentage is worth. The **Limit Economics** tab answers that:
+how many tokens, and how many dollars, one percent of each window buys.
+
+Every reading of a limit percentage is appended to a ledger together with the
+token and dollar counters standing at that moment, so the rate is the slope
+between two readings inside the same window:
+
+- `limit-history.jsonl` — live samples, one row per (account, window) whenever
+  the percentage ticks, the window resets, or a 30-minute heartbeat elapses.
+  Append-only; safe to keep forever.
+- `limit-history-backfill.jsonl` — Codex history replayed from
+  `~/.codex/sessions`. Codex writes its rate-limit percentages into every
+  rollout transcript, so its series reaches back as far as the transcripts do.
+  Derived and regenerable; rewritten at startup and every six hours.
+
+Claude, Grok, and Antigravity keep no local record of past limit percentages,
+so their measured series necessarily begins the first time the dashboard runs.
+Until a window has moved more than five percentage points, whole-number
+percentages make a measured rate imprecise, so a weekly window falls back to an
+estimate — the last seven days of usage divided by the percentage consumed —
+and is labelled `estimated`. Antigravity is excluded from that estimate because
+it splits one token pool across separate Gemini and Claude/GPT quotas, so no
+single percentage explains its totals.
+
+### API
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /api/limit-history` | Derived view: per account and window, the per-percent rate for each cycle plus a pooled figure. |
+| `GET /api/limit-history/raw?account=&window=&limit=` | Raw ledger rows, for exporting or charting elsewhere. |
+| `POST /api/limit-history/backfill` | Re-replay the Codex transcripts now. |
+
+Set `LIMIT_HISTORY_SAMPLER=off` to disable background sampling, or
+`LIMIT_HISTORY_SAMPLE_MS` to change its period (defaults to the 5-minute disk
+cache interval, so it costs no extra scanning).
+
 ## Profile discovery
 
 Every refresh scans for the standard profile directories:

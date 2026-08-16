@@ -21,6 +21,10 @@ const binDir = path.resolve(process.env.CC_USAGE_BIN_DIR || (isWindows
   : path.join(process.env.XDG_BIN_HOME || path.join(home, '.local', 'bin'))));
 const nodePath = process.execPath;
 const serverPath = path.join(appDir, 'server.js');
+// Tight V8 heap caps: the dashboard only holds an aggregated summary, and the
+// session scanners are streaming, so 80MB of old space is plenty. This keeps
+// the daemon at a few tens of MB of RSS instead of growing to gigabytes.
+const NODE_FLAGS = '--max-old-space-size=80 --max-semi-space-size=8';
 
 const args = new Set(process.argv.slice(2));
 const skipDeps = args.has('--skip-deps');
@@ -108,14 +112,14 @@ async function writeLaunchers() {
       'set "PORT=%~1"',
       `if "%PORT%"=="" set "PORT=${dashboardPort}"`,
       `set "CC_USAGE_HOME=${home}"`,
-      `"${nodePath}" "${serverPath}"`,
+      `"${nodePath}" ${NODE_FLAGS} "${serverPath}"`,
       '',
     ].join('\r\n');
     await fsp.writeFile(path.join(binDir, 'cc-usage-dashboard.cmd'), cmd);
     await fsp.writeFile(path.join(appDir, 'start-dashboard.ps1'), [
       `$env:CC_USAGE_HOME = '${home.replace(/'/g, "''")}'`,
       `$env:PORT = if ($args.Count -gt 0) { $args[0] } else { '${dashboardPort}' }`,
-      `& '${nodePath.replace(/'/g, "''")}' '${serverPath.replace(/'/g, "''")}'`,
+      `& '${nodePath.replace(/'/g, "''")}' ${NODE_FLAGS} '${serverPath.replace(/'/g, "''")}'`,
       '',
     ].join('\r\n'));
     console.log(`Launcher: ${path.join(binDir, 'cc-usage-dashboard.cmd')}`);
@@ -129,7 +133,7 @@ async function writeLaunchers() {
     `PORT="\${1:-\${PORT:-${dashboardPort}}}"`,
     'export PORT',
     `export CC_USAGE_HOME=${shellQuote(home)}`,
-    `exec ${shellQuote(nodePath)} ${shellQuote(serverPath)}`,
+    `exec ${shellQuote(nodePath)} ${NODE_FLAGS} ${shellQuote(serverPath)}`,
     '',
   ].join('\n');
   const launcherPath = path.join(binDir, 'cc-usage-dashboard');
@@ -153,10 +157,16 @@ async function installLinuxService() {
     `Environment=PORT=${dashboardPort}`,
     `Environment=CC_USAGE_HOME=${systemdQuote(home)}`,
     `Environment=PATH=${systemdQuote(process.env.PATH || '')}`,
-    `ExecStart=${systemdQuote(nodePath)} ${systemdQuote(serverPath)}`,
+    `ExecStart=${systemdQuote(nodePath)} ${NODE_FLAGS} ${systemdQuote(serverPath)}`,
     `WorkingDirectory=${systemdQuote(appDir)}`,
     'Restart=on-failure',
     'RestartSec=3',
+    // The heavy session scans pull multi-GB files through the cgroup as
+    // reclaimable page cache; cap it so the unit's memory meter stays sane
+    // instead of showing gigabytes. Real usage (80MB heap + streaming scans)
+    // is far below MemoryHigh.
+    'MemoryHigh=300M',
+    'MemoryMax=1G',
     '',
     '[Install]',
     'WantedBy=default.target',
@@ -180,7 +190,7 @@ async function installMacService() {
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
 <key>Label</key><string>com.cc-usage-dashboard</string>
-<key>ProgramArguments</key><array><string>${xmlQuote(nodePath)}</string><string>${xmlQuote(serverPath)}</string></array>
+<key>ProgramArguments</key><array><string>${xmlQuote(nodePath)}</string>${NODE_FLAGS.split(' ').map((f) => `<string>${xmlQuote(f)}</string>`).join('')}<string>${xmlQuote(serverPath)}</string></array>
 <key>WorkingDirectory</key><string>${xmlQuote(appDir)}</string>
 <key>EnvironmentVariables</key><dict><key>CC_USAGE_HOME</key><string>${xmlQuote(home)}</string><key>PORT</key><string>${dashboardPort}</string></dict>
 <key>RunAtLoad</key><true/><key>KeepAlive</key><true/>

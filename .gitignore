@@ -1,5 +1,14 @@
 # Runtime data — per-machine usage snapshots
 claude-live-limits-*.json
+grok-live-limits-*.json
+usage-cache.json
+
+# Limit-history ledger — a per-machine record of this user's own usage.
+# Never committed: the live file is personal data and the backfill is derived
+# from local transcripts and regenerates itself on startup.
+limit-history.jsonl
+limit-history-backfill.jsonl
+limit-history-backfill.state.json
 
 # Backups created by configure-statusline.js during install
 *.cc-usage-backup

@@ -1,9 +1,11 @@
 const http = require('node:http');
 const { exec, execFile } = require('node:child_process');
 const { readFile, readdir, writeFile } = require('node:fs/promises');
-const { existsSync } = require('node:fs');
+const { existsSync, createReadStream } = require('node:fs');
+const readline = require('node:readline');
 const path = require('node:path');
 const { detectProfileAccounts, getHomeDir } = require('./profile-discovery');
+const limitHistory = require('./limit-history');
 
 let DatabaseSync;
 try {
@@ -581,22 +583,42 @@ async function fetchGrokBilling(accessToken, search = '', timeoutMs = 20_000) {
 // Normalize monthly (/v1/billing) + credits (?format=credits) configs.
 // Live shape from cli-chat-proxy (OIDC session token, same as Grok CLI /usage):
 //   monthly: { monthlyLimit:{val}, used:{val}, billingPeriodStart/End, ... }
-//   credits: { creditUsagePercent, currentPeriod:{end}, onDemand*, prepaidBalance, ... }
-function grokRateLimitsFromConfigs(monthly = {}, credits = {}, { live = false, source = 'grok-billing', fetchedAtMs = Date.now() } = {}) {
-  const monthlyLimit = grokVal(monthly.monthlyLimit) ?? grokVal(credits.monthlyLimit);
-  const monthlyUsed = grokVal(monthly.used) ?? grokVal(credits.used) ?? grokVal(credits.includedUsed) ?? grokVal(credits.totalUsed);
+//   credits: { creditUsagePercent, currentPeriod:{end}, onDemand*, prepaidBalance,
+//              isUnifiedBillingUser, productUsage:[{product, usagePercent}], ... }
+// Unified-billing accounts (X Premium+ / GrokBuild) report monthlyLimit/used as 0.
+// Their real quota is the weekly creditUsagePercent window.
+function grokRateLimitsFromConfigs(monthly = {}, credits = {}, {
+  live = false,
+  source = 'grok-billing',
+  fetchedAtMs = Date.now(),
+  subscriptionTier = null,
+} = {}) {
+  let monthlyLimit = grokVal(monthly.monthlyLimit) ?? grokVal(credits.monthlyLimit);
+  let monthlyUsed = grokVal(monthly.used) ?? grokVal(credits.used) ?? grokVal(credits.includedUsed) ?? grokVal(credits.totalUsed);
+  const unifiedBilling = !!(credits.isUnifiedBillingUser || monthly.isUnifiedBillingUser
+    || monthlyLimit === 0);
+
+  // xAI returns {val:0} for the legacy monthly pool once an account is on
+  // unified billing. Treat zero as "no monthly pool", not 0/0 usage.
+  if (monthlyLimit == null || monthlyLimit <= 0) {
+    monthlyLimit = null;
+    monthlyUsed = null;
+  }
+
+  const weeklyResetsAt = credits.currentPeriod?.end || credits.billingPeriodEnd
+    || monthly.currentPeriod?.end || monthly.billingPeriodEnd || null;
 
   const weeklyBar = (() => {
     if (typeof credits.creditUsagePercent === 'number') {
       return {
         percent: Math.round(credits.creditUsagePercent),
-        resetsAt: credits.currentPeriod?.end || credits.billingPeriodEnd || null,
+        resetsAt: weeklyResetsAt,
       };
     }
     if (typeof monthly.creditUsagePercent === 'number') {
       return {
         percent: Math.round(monthly.creditUsagePercent),
-        resetsAt: monthly.currentPeriod?.end || monthly.billingPeriodEnd || null,
+        resetsAt: weeklyResetsAt,
       };
     }
     // productUsage sometimes carries per-product weekly % (Api / GrokBuild).
@@ -606,21 +628,21 @@ function grokRateLimitsFromConfigs(monthly = {}, credits = {}, { live = false, s
       if (typeof build?.usagePercent === 'number') {
         return {
           percent: Math.round(build.usagePercent),
-          resetsAt: credits.currentPeriod?.end || credits.billingPeriodEnd || null,
+          resetsAt: weeklyResetsAt,
         };
       }
     }
-    if (credits.currentPeriod?.end || credits.billingPeriodEnd || monthly.currentPeriod?.end || monthly.billingPeriodEnd) {
+    if (weeklyResetsAt) {
       return {
         percent: null,
-        resetsAt: credits.currentPeriod?.end || credits.billingPeriodEnd || monthly.currentPeriod?.end || monthly.billingPeriodEnd,
+        resetsAt: weeklyResetsAt,
         windowOnly: true,
       };
     }
     return null;
   })();
 
-  const monthlyBar = monthlyLimit != null && monthlyLimit > 0 && monthlyUsed != null
+  const monthlyBar = monthlyLimit != null && monthlyUsed != null
     ? {
         percent: Math.min(100, Math.round((monthlyUsed / monthlyLimit) * 100)),
         resetsAt: monthly.billingPeriodEnd || null,
@@ -629,56 +651,127 @@ function grokRateLimitsFromConfigs(monthly = {}, credits = {}, { live = false, s
       }
     : null;
 
-  // Grok: Monthly is primary (included credits pool), Weekly is secondary.
-  // Map onto the dashboard's two slots as session=Monthly, weekly=Weekly so
-  // the first bar is the monthly limit users care about most.
+  const weekly = weeklyBar && weeklyBar.percent != null
+    ? { percent: weeklyBar.percent, resetsAt: weeklyBar.resetsAt, label: 'Weekly' }
+    : weeklyBar && weeklyBar.windowOnly
+      ? { percent: 0, resetsAt: weeklyBar.resetsAt, label: 'Weekly', windowOnly: true }
+      : null;
+
+  // Product bars (e.g. GrokBuild) — skip duplicates of the overall weekly %.
+  const productWindows = [];
+  const products = credits.productUsage || monthly.productUsage;
+  if (Array.isArray(products)) {
+    for (const p of products) {
+      if (typeof p?.usagePercent !== 'number') continue;
+      const label = String(p.product || 'Product');
+      const percent = Math.round(p.usagePercent);
+      if (weekly && weekly.percent === percent && /grokbuild|build/i.test(label)) continue;
+      productWindows.push({ label, percent, resetsAt: weeklyResetsAt });
+    }
+  }
+
+  // Prefer an explicit windows list so the UI can render Monthly + Weekly,
+  // or just Weekly for unified-billing accounts without a blank Monthly slot.
+  const windows = [];
+  if (monthlyBar) {
+    windows.push({
+      label: 'Monthly',
+      percent: monthlyBar.percent,
+      resetsAt: monthlyBar.resetsAt,
+      used: monthlyBar.used,
+      limit: monthlyBar.limit,
+    });
+  }
+  if (weekly && weekly.percent != null) {
+    windows.push({
+      label: weekly.label || 'Weekly',
+      percent: weekly.percent,
+      resetsAt: weekly.resetsAt,
+    });
+  } else if (weekly && weekly.windowOnly) {
+    windows.push({
+      label: 'Weekly',
+      percent: 0,
+      resetsAt: weekly.resetsAt,
+      windowOnly: true,
+    });
+  }
+  for (const pw of productWindows) windows.push(pw);
+
   const onDemandCap = grokVal(credits.onDemandCap) ?? grokVal(monthly.onDemandCap);
   const onDemandUsed = grokVal(credits.onDemandUsed) ?? grokVal(monthly.onDemandUsed) ?? 0;
   const prepaidBalance = grokVal(credits.prepaidBalance) ?? grokVal(monthly.prepaidBalance);
+  const planLabel = subscriptionTier || credits.subscriptionTier || monthly.subscriptionTier || null;
+
+  const creditsOut = (() => {
+    const hasPrepaid = prepaidBalance != null;
+    const hasOnDemand = onDemandCap != null;
+    const hasMonthly = monthlyLimit != null && monthlyLimit > 0;
+    if (!hasPrepaid && !hasOnDemand && !hasMonthly) return null;
+    const out = {
+      balance: prepaidBalance ?? 0,
+      onDemandUsed,
+      onDemandCap: onDemandCap ?? 0,
+    };
+    if (hasMonthly) {
+      out.monthlyUsed = monthlyUsed;
+      out.monthlyLimit = monthlyLimit;
+    }
+    return out;
+  })();
 
   return {
     fetchedAtMs,
     ageMinutes: Math.max(0, Math.round((Date.now() - fetchedAtMs) / 60000)),
     live,
     source,
-    // Primary: monthly included pool (used / monthlyLimit)
+    // Legacy slot mapping: session=Monthly when the pool exists.
     session: monthlyBar
       ? { percent: monthlyBar.percent, resetsAt: monthlyBar.resetsAt, label: 'Monthly', used: monthlyBar.used, limit: monthlyBar.limit }
       : null,
-    // Secondary: weekly credit window (% used this week)
-    weekly: weeklyBar && weeklyBar.percent != null
-      ? { percent: weeklyBar.percent, resetsAt: weeklyBar.resetsAt, label: 'Weekly' }
-      : weeklyBar && weeklyBar.windowOnly
-        ? { percent: 0, resetsAt: weeklyBar.resetsAt, label: 'Weekly', windowOnly: true }
-        : null,
-    credits: prepaidBalance != null || onDemandCap != null || monthlyLimit != null
-      ? {
-          balance: prepaidBalance ?? 0,
-          onDemandUsed,
-          onDemandCap: onDemandCap ?? 0,
-          monthlyUsed,
-          monthlyLimit,
-        }
-      : null,
-    subscriptionTier: credits.subscriptionTier || monthly.subscriptionTier || null,
+    weekly,
+    windows: windows.length ? windows : null,
+    unifiedBilling,
+    planLabel,
+    credits: creditsOut,
+    subscriptionTier: planLabel,
   };
 }
 
 function grokLimitsComplete(limits) {
-  // Complete when we have the monthly pool (session bar). Weekly alone is partial.
-  return !!(limits && limits.session && limits.session.label === 'Monthly');
+  // Monthly pool (legacy) OR a real weekly % (unified billing) is enough to cache.
+  if (!limits) return false;
+  if (limits.session && limits.session.label === 'Monthly' && limits.session.limit > 0) return true;
+  if (limits.weekly && limits.weekly.percent != null) return true;
+  if (Array.isArray(limits.windows) && limits.windows.some((w) => w && w.percent != null)) return true;
+  return false;
+}
+
+function creditsHaveRealMonthly(credits) {
+  return !!(credits && credits.monthlyLimit != null && credits.monthlyLimit > 0);
 }
 
 function mergeGrokLimits(primary, secondary) {
   if (!primary) return secondary || null;
   if (!secondary) return primary;
+  const planLabel = primary.planLabel || primary.subscriptionTier
+    || secondary.planLabel || secondary.subscriptionTier || null;
   return {
     ...secondary,
     ...primary,
     session: primary.session || secondary.session || null,
     weekly: primary.weekly || secondary.weekly || null,
-    credits: primary.credits?.monthlyLimit != null ? primary.credits : (secondary.credits || primary.credits),
-    subscriptionTier: primary.subscriptionTier || secondary.subscriptionTier || null,
+    windows: (primary.windows && primary.windows.length)
+      ? primary.windows
+      : (secondary.windows || primary.windows || null),
+    credits: creditsHaveRealMonthly(primary.credits)
+      ? primary.credits
+      : (creditsHaveRealMonthly(secondary.credits)
+        ? secondary.credits
+        : (primary.credits || secondary.credits)),
+    unifiedBilling: !!(primary.unifiedBilling || secondary.unifiedBilling),
+    planLabel,
+    subscriptionTier: planLabel,
     source: primary.source === secondary.source
       ? primary.source
       : `${primary.source}+${secondary.source}`,
@@ -700,8 +793,11 @@ async function writeGrokLimitsSnapshot(accountId, limits) {
       fetchedAtMs: limits.fetchedAtMs,
       session: limits.session,
       weekly: limits.weekly,
+      windows: limits.windows || null,
+      unifiedBilling: !!limits.unifiedBilling,
+      planLabel: limits.planLabel || limits.subscriptionTier || null,
       credits: limits.credits,
-      subscriptionTier: limits.subscriptionTier,
+      subscriptionTier: limits.subscriptionTier || limits.planLabel || null,
       source: limits.source,
     }), 'utf8');
   } catch {}
@@ -712,16 +808,31 @@ async function readGrokLimitsSnapshot(accountId) {
     const raw = await readFile(grokLimitsSnapshotPath(accountId), 'utf8');
     const u = JSON.parse(raw);
     if (u.accountId !== accountId) return null;
-    if (!u.session && !u.weekly) return null;
+    if (!u.session && !u.weekly && !(u.windows && u.windows.length)) return null;
+    // Drop stale zeroed monthly pool from older snapshots.
+    let session = u.session || null;
+    let credits = u.credits || null;
+    if (session && (!(session.limit > 0) || session.label === 'Monthly' && session.limit === 0)) {
+      session = null;
+    }
+    if (credits && !(credits.monthlyLimit > 0)) {
+      const { monthlyUsed, monthlyLimit, ...rest } = credits;
+      credits = rest;
+      if (credits.balance == null && credits.onDemandCap == null) credits = null;
+    }
+    const planLabel = u.planLabel || u.subscriptionTier || null;
     return {
       fetchedAtMs: u.fetchedAtMs || Date.now(),
       ageMinutes: Math.round((Date.now() - (u.fetchedAtMs || Date.now())) / 60000),
       live: false,
       source: u.source || 'grok-snapshot',
-      session: u.session || null,
+      session,
       weekly: u.weekly || null,
-      credits: u.credits || null,
-      subscriptionTier: u.subscriptionTier || null,
+      windows: u.windows || null,
+      unifiedBilling: !!u.unifiedBilling || !session,
+      planLabel,
+      credits,
+      subscriptionTier: planLabel,
     };
   } catch {
     return null;
@@ -749,6 +860,7 @@ async function fetchLiveGrokRateLimits(accessToken) {
     live: true,
     source: 'grok-billing',
     fetchedAtMs: Date.now(),
+    subscriptionTier: creditsRaw?.subscriptionTier || monthlyRaw?.subscriptionTier || null,
   });
 }
 
@@ -815,10 +927,19 @@ async function getGrokRateLimits(account, force = false) {
       accessToken = refreshedToken;
       fresh = await fetchLiveGrokRateLimits(accessToken);
     }
-    // If live monthly landed without weekly, stitch in CLI log weekly %.
-    if (!fresh.weekly) {
+    // Stitch CLI-log weekly/plan label when the live response is partial.
+    // subscriptionTier is only logged by the CLI (not always on HTTP billing).
+    {
       const fromLog = await getGrokLimitsFromCliLog(account.configDir);
-      if (fromLog?.weekly) fresh = mergeGrokLimits(fresh, fromLog);
+      if (fromLog) {
+        if (!fresh.weekly && fromLog.weekly) fresh = mergeGrokLimits(fresh, fromLog);
+        else if (!fresh.planLabel && (fromLog.planLabel || fromLog.subscriptionTier)) {
+          fresh = mergeGrokLimits(fresh, fromLog);
+        } else if (!fresh.planLabel && fromLog.subscriptionTier) {
+          fresh.planLabel = fromLog.subscriptionTier;
+          fresh.subscriptionTier = fromLog.subscriptionTier;
+        }
+      }
     }
     liveGrokLimits.set(account.id, { value: fresh, at: now });
     await writeGrokLimitsSnapshot(account.id, fresh);
@@ -866,6 +987,7 @@ function grokUsageCostUsd(v) {
 const CLAUDE_PRICING = {
   'claude-fable-5': { input: 10, output: 50, cacheWrite: 12.5, cacheRead: 1 },
   'claude-mythos-5': { input: 10, output: 50, cacheWrite: 12.5, cacheRead: 1 },
+  'claude-opus-5': { input: 5, output: 25, cacheWrite: 6.25, cacheRead: 0.5 },
   'claude-opus-4-8': { input: 5, output: 25, cacheWrite: 6.25, cacheRead: 0.5 },
   'claude-opus-4-7': { input: 5, output: 25, cacheWrite: 6.25, cacheRead: 0.5 },
   'claude-opus-4-6': { input: 5, output: 25, cacheWrite: 6.25, cacheRead: 0.5 },
@@ -915,6 +1037,7 @@ function run(cmd, env) {
     exec(cmd, {
       maxBuffer: 1024 * 1024 * 32,
       timeout: 30000,
+      resourceLimits: { maxOldGenerationSizeMb: 512, maxYoungGenerationSizeMb: 16 },
       env: { ...process.env, ...env },
     }, (err, stdout) => {
       if (err) return reject(err);
@@ -927,12 +1050,31 @@ function run(cmd, env) {
   });
 }
 
+// Stream a JSONL file line-by-line so a giant session log costs only one line
+// of memory instead of a whole-file read + split (a 1.4GB Grok sessions dir
+// used to push the process past 3GB of RSS every poll).
+async function forEachLine(filePath, onLine) {
+  await new Promise((resolve) => {
+    let stream;
+    try {
+      stream = createReadStream(filePath, { encoding: 'utf8' });
+    } catch {
+      return resolve();
+    }
+    const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
+    rl.on('line', onLine);
+    rl.on('error', () => resolve());
+    rl.on('close', () => resolve());
+  });
+}
+
 function runCcusage(args, env) {
   return new Promise((resolve, reject) => {
     execFile(CCUSAGE_BIN, args, {
       maxBuffer: 1024 * 1024 * 32,
       timeout: 30000,
       windowsHide: true,
+      resourceLimits: { maxOldGenerationSizeMb: 512, maxYoungGenerationSizeMb: 16 },
       env: { ...process.env, ...env },
     }, (err, stdout) => {
       if (err) return reject(err);
@@ -958,10 +1100,22 @@ function sumTokens(rows) {
 
 function summarize(daily, costKey = 'totalCost') {
   const sorted = daily.slice().sort((a, b) => (a.period ?? a.date).localeCompare(b.period ?? b.date));
-  const today = sorted[sorted.length - 1];
-  const last7 = sorted.slice(-7);
   const now = new Date();
-  const thisMonthPrefix = now.toISOString().slice(0, 7);
+  // Match on the actual calendar day rather than "the newest row we have" —
+  // otherwise an account with no usage today reports its last active day as
+  // today. Providers bucket by local date or by UTC date depending on where
+  // the row came from, so accept either spelling of "today".
+  const localToday = new Date(now.getTime() - now.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+  const utcToday = now.toISOString().slice(0, 10);
+  const today = sorted.find((d) => {
+    const key = d.period ?? d.date;
+    return key === localToday || key === utcToday;
+  });
+  // A rolling 7-day window, not "the last 7 rows we have" — an account that
+  // was idle for a fortnight should not report month-old spend as this week's.
+  const weekStart = new Date(Date.parse(localToday) - 6 * 86400000).toISOString().slice(0, 10);
+  const last7 = sorted.filter((d) => (d.period ?? d.date) >= weekStart);
+  const thisMonthPrefix = localToday.slice(0, 7);
   const thisMonth = sorted.filter((d) => (d.period ?? d.date).startsWith(thisMonthPrefix));
 
   return {
@@ -1137,67 +1291,101 @@ async function getClaudeAccountUsage(account, force) {
 }
 
 const PI_SESSIONS_DIR = path.join(HOME, '.pi', 'agent', 'sessions');
+const PRIME_SESSIONS_DIR = path.join(HOME, '.prime', 'agent', 'sessions');
 
-async function scanPiCodexSessions() {
+async function jsonlFilesUnder(rootDir) {
+  const files = [];
+  async function visit(dir) {
+    let entries;
+    try { entries = await readdir(dir, { withFileTypes: true }); } catch { return; }
+    for (const entry of entries) {
+      const entryPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) await visit(entryPath);
+      else if (entry.isFile() && entry.name.endsWith('.jsonl')) files.push(entryPath);
+    }
+  }
+  await visit(rootDir);
+  return files;
+}
+
+async function scanCodexHarnessSessions() {
   const byDate = new Map();
   const byModel = new Map();
-  try {
-    const projDirs = await readdir(PI_SESSIONS_DIR, { withFileTypes: true });
-    for (const pDir of projDirs) {
-      if (!pDir.isDirectory()) continue;
-      const dirPath = path.join(PI_SESSIONS_DIR, pDir.name);
-      let files;
-      try { files = await readdir(dirPath); } catch { continue; }
-      for (const file of files) {
-        if (!file.endsWith('.jsonl')) continue;
-        let content;
-        try { content = await readFile(path.join(dirPath, file), 'utf8'); } catch { continue; }
-        for (const line of content.split('\n')) {
-          if (!line.includes('openai-codex') || !line.includes('"assistant"')) continue;
-          let o;
-          try { o = JSON.parse(line); } catch { continue; }
-          if (o.type !== 'message' || o.message?.role !== 'assistant') continue;
-          if (o.message?.provider !== 'openai-codex') continue;
-          const u = o.message.usage;
-          if (!u) continue;
+  const sourceCounts = {};
 
-          const date = (o.timestamp || o.message.timestamp || '').slice(0, 10);
-          if (!date) continue;
+  for (const [source, sessionsDir] of [
+    ['Pi', PI_SESSIONS_DIR],
+    ['Prime Agent', PRIME_SESSIONS_DIR],
+  ]) {
+    const files = await jsonlFilesUnder(sessionsDir);
+    for (const filePath of files) {
+      await forEachLine(filePath, (line) => {
+        if (!line.includes('openai-codex') || !line.includes('"assistant"')) return;
+        let o;
+        try { o = JSON.parse(line); } catch { return; }
+        if (o.type !== 'message' || o.message?.role !== 'assistant') return;
+        if (o.message?.provider !== 'openai-codex') return;
+        const u = o.message.usage;
+        if (!u) return;
 
-          const modelName = o.message.model || 'gpt-5.6-luna';
-          const costObj = u.cost || codexModelCost(modelName, {
-            inputTokens: u.input,
-            outputTokens: u.output,
-            cacheReadTokens: u.cacheRead,
-          }) || { total: 0, input: 0, output: 0, cacheRead: 0 };
+        const rawTimestamp = o.timestamp || o.message.timestamp;
+        const timestamp = typeof rawTimestamp === 'number'
+          ? new Date(rawTimestamp > 1e12 ? rawTimestamp : rawTimestamp * 1000).toISOString()
+          : rawTimestamp;
+        const date = String(timestamp || '').slice(0, 10);
+        if (!date) return;
 
-          const totalCost = typeof costObj === 'number' ? costObj : (costObj.total ?? 0);
-          const inputTok = u.input || 0;
-          const outputTok = u.output || 0;
-          const cacheReadTok = u.cacheRead || 0;
-          const cacheWriteTok = u.cacheWrite || 0;
-          const totTok = u.totalTokens || (inputTok + outputTok + cacheReadTok);
+        const modelName = o.message.model || 'gpt-5.6-luna';
+        const inputTok = Number(u.input) || 0;
+        const outputTok = Number(u.output) || 0;
+        const cacheReadTok = Number(u.cacheRead) || 0;
+        const cacheWriteTok = Number(u.cacheWrite) || 0;
+        const computedCost = codexModelCost(modelName, {
+          inputTokens: inputTok,
+          outputTokens: outputTok,
+          cacheReadTokens: cacheReadTok,
+        });
+        // Use the dashboard's Codex rate card when the model is known so
+        // direct Codex CLI and harness totals use identical pricing. Older
+        // harness records may provide a cost object for models we do not know.
+        const reportedCost = typeof u.cost === 'number'
+          ? { total: u.cost }
+          : u.cost && typeof u.cost === 'object' ? u.cost : null;
+        const costObj = computedCost || reportedCost || { total: 0 };
+        const totalCost = Number(costObj.total)
+          || (Number(costObj.input) || 0)
+          + (Number(costObj.output) || 0)
+          + (Number(costObj.cacheWrite) || 0)
+          + (Number(costObj.cacheRead) || 0);
+        const totTok = Number(u.totalTokens) || (inputTok + outputTok + cacheReadTok + cacheWriteTok);
 
-          const day = byDate.get(date) || { date, costUSD: 0, totalTokens: 0, unpriced: false };
-          day.costUSD += totalCost;
-          day.totalTokens += totTok;
-          byDate.set(date, day);
+        const day = byDate.get(date) || { date, costUSD: 0, totalTokens: 0, unpriced: false };
+        day.costUSD += totalCost;
+        day.totalTokens += totTok;
+        day.unpriced = day.unpriced || (!computedCost && !reportedCost);
+        byDate.set(date, day);
 
-          const cur = byModel.get(modelName) || blankBreakdown(modelName, 'OpenAI');
-          cur.tokens.input += inputTok;
-          cur.tokens.output += outputTok;
-          cur.tokens.cacheRead += cacheReadTok;
-          cur.tokens.cacheWrite += cacheWriteTok;
-          cur.cost.input += costObj.input || 0;
-          cur.cost.output += costObj.output || 0;
-          cur.cost.cacheRead += costObj.cacheRead || 0;
-          cur.cost.total += totalCost;
-          byModel.set(modelName, cur);
-        }
-      }
+        const cur = byModel.get(modelName) || blankBreakdown(modelName, 'OpenAI');
+        cur.tokens.input += inputTok;
+        cur.tokens.output += outputTok;
+        cur.tokens.cacheRead += cacheReadTok;
+        cur.tokens.cacheWrite += cacheWriteTok;
+        cur.cost.input += Number(costObj.input) || 0;
+        cur.cost.output += Number(costObj.output) || 0;
+        cur.cost.cacheWrite += Number(costObj.cacheWrite) || 0;
+        cur.cost.cacheRead += Number(costObj.cacheRead) || 0;
+        cur.cost.total += totalCost;
+        cur.unpriced = cur.unpriced || (!computedCost && !reportedCost);
+        byModel.set(modelName, cur);
+        sourceCounts[source] = (sourceCounts[source] || 0) + 1;
+      });
     }
-  } catch {}
-  return { daily: [...byDate.values()], models: [...byModel.values()] };
+  }
+  return {
+    daily: [...byDate.values()],
+    models: [...byModel.values()],
+    sourceCounts,
+  };
 }
 
 function mergeCodexDaily(nativeDaily, piDaily) {
@@ -1240,21 +1428,25 @@ function mergeCodexModels(nativeModels, piModels) {
 }
 
 async function getCodexAccountUsage(account, force) {
-  const [sessionsRaw, piUsage, rateLimits] = await Promise.all([
+  const [sessionsRaw, harnessUsage, rateLimits] = await Promise.all([
     runCcusage(['codex', 'session', '--json', '-O'], { CODEX_HOME: account.configDir }).catch(() => ({ sessions: [] })),
-    scanPiCodexSessions(),
+    scanCodexHarnessSessions(),
     getCodexRateLimits(account, force),
   ]);
   const sessions = sessionsRaw.sessions || sessionsRaw.session || [];
   const nativeDaily = codexDailyFromSessions(sessions);
   const nativeModels = modelTableFromCodexSessions(sessions);
 
-  const mergedDaily = mergeCodexDaily(nativeDaily, piUsage.daily);
-  const mergedModels = mergeCodexModels(nativeModels, piUsage.models);
+  const mergedDaily = mergeCodexDaily(nativeDaily, harnessUsage.daily);
+  const mergedModels = mergeCodexModels(nativeModels, harnessUsage.models);
 
   const section = summarize(mergedDaily, 'costUSD');
   section.rateLimits = rateLimits;
   section.models = mergedModels;
+  section.usageSources = ['Codex CLI'];
+  for (const [source, count] of Object.entries(harnessUsage.sourceCounts)) {
+    if (count) section.usageSources.push(`${source} (${count} Codex responses)`);
+  }
   return section;
 }
 
@@ -1284,22 +1476,16 @@ async function scanGrokSessionUsage(configDir) {
     for (const sEnt of sessionDirs) {
       if (!sEnt.isDirectory()) continue;
       const updatesPath = path.join(cwdPath, sEnt.name, 'updates.jsonl');
-      let text;
-      try {
-        text = await readFile(updatesPath, 'utf8');
-      } catch {
-        continue;
-      }
-      for (const line of text.split('\n')) {
-        if (!line.includes('turn_completed') || !line.includes('usage')) continue;
+      await forEachLine(updatesPath, (line) => {
+        if (!line.includes('turn_completed') || !line.includes('usage')) return;
         let o;
-        try { o = JSON.parse(line); } catch { continue; }
+        try { o = JSON.parse(line); } catch { return; }
         const update = o?.params?.update;
-        if (!update || update.sessionUpdate !== 'turn_completed' || !update.usage) continue;
+        if (!update || update.sessionUpdate !== 'turn_completed' || !update.usage) return;
         const usage = update.usage;
         let ts = o.timestamp;
         if (typeof ts === 'number' && ts > 1e12) ts = Math.floor(ts / 1000);
-        if (typeof ts !== 'number') continue;
+        if (typeof ts !== 'number') return;
         const date = new Date(ts * 1000).toISOString().slice(0, 10);
         const row = byDate.get(date) || {
           date,
@@ -1344,7 +1530,7 @@ async function scanGrokSessionUsage(configDir) {
         row.totalTokens += usage.totalTokens
           || ((usage.inputTokens || 0) + (usage.outputTokens || 0) + (usage.cachedReadTokens || 0));
         byDate.set(date, row);
-      }
+      });
     }
   }
 
@@ -1388,11 +1574,15 @@ async function getGrokAccountUsage(account, force) {
   const section = summarize(scanned.daily, 'costUSD');
   section.rateLimits = rateLimits;
   section.models = scanned.models;
-  section.limitLabels = { session: 'Monthly', weekly: 'Weekly' };
+  section.planLabel = rateLimits?.planLabel || rateLimits?.subscriptionTier || null;
+  section.limitLabels = rateLimits?.unifiedBilling
+    ? { session: 'Weekly', weekly: 'Weekly' }
+    : { session: 'Monthly', weekly: 'Weekly' };
   return section;
 }
 
 const ANTIGRAVITY_PRICING = {
+  'gemini-3.7-flash': { input: 0.75, cachedInput: 0.1875, output: 3.75 },
   'gemini-3.6-flash': { input: 0.5, cachedInput: 0.125, output: 3.0 },
   'gemini-3.5-flash': { input: 0.5, cachedInput: 0.125, output: 3.0 },
   'gemini-3.1-pro': { input: 1.25, cachedInput: 0.3125, output: 5.0 },
@@ -1403,7 +1593,7 @@ const ANTIGRAVITY_PRICING = {
 
 function antigravityModelCost(modelName, u) {
   const base = modelName.replace(/-\d{4}-\d{2}-\d{2}$/, '');
-  const r = ANTIGRAVITY_PRICING[base] || { input: 0.5, cachedInput: 0.125, output: 3.0 };
+  const r = ANTIGRAVITY_PRICING[base] || { input: 0.75, cachedInput: 0.1875, output: 3.75 };
   return {
     input: ((u.input || 0) * r.input) / 1_000_000,
     output: ((u.output || 0) * r.output) / 1_000_000,
@@ -1424,19 +1614,17 @@ async function scanPiAntigravitySessions() {
       try { files = await readdir(dirPath); } catch { continue; }
       for (const file of files) {
         if (!file.endsWith('.jsonl')) continue;
-        let content;
-        try { content = await readFile(path.join(dirPath, file), 'utf8'); } catch { continue; }
-        for (const line of content.split('\n')) {
-          if (!line.includes('antigravity') || !line.includes('"assistant"')) continue;
+        await forEachLine(path.join(dirPath, file), (line) => {
+          if (!line.includes('antigravity') || !line.includes('"assistant"')) return;
           let o;
-          try { o = JSON.parse(line); } catch { continue; }
-          if (o.type !== 'message' || o.message?.role !== 'assistant') continue;
-          if (o.message?.provider !== 'antigravity') continue;
+          try { o = JSON.parse(line); } catch { return; }
+          if (o.type !== 'message' || o.message?.role !== 'assistant') return;
+          if (o.message?.provider !== 'antigravity') return;
           const u = o.message.usage;
-          if (!u) continue;
+          if (!u) return;
 
           const date = (o.timestamp || o.message.timestamp || '').slice(0, 10);
-          if (!date) continue;
+          if (!date) return;
 
           const modelName = o.message.model || 'gemini-3.6-flash';
           const cost = antigravityModelCost(modelName, u);
@@ -1463,7 +1651,7 @@ async function scanPiAntigravitySessions() {
           cur.cost.cacheRead += cost.cacheRead;
           cur.cost.total += totalCost;
           byModel.set(modelName, cur);
-        }
+        });
       }
     }
   } catch {}
@@ -1517,12 +1705,10 @@ function scanOpencodeSessions(dbPath) {
   let db;
   try {
     db = new DatabaseSync(dbPath, { readOnly: true });
-    const rows = db
-      .prepare(
-        'SELECT id, model, agent, cost, tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, tokens_cache_write, time_created FROM session',
-      )
-      .all();
-    const messageRows = db.prepare(`
+    const sessionStmt = db.prepare(
+      'SELECT id, model, agent, cost, tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, tokens_cache_write, time_created FROM session',
+    );
+    const messageStmt = db.prepare(`
       SELECT m.session_id AS session_id,
         json_extract(m.data, '$.modelID') AS model_id,
         json_extract(m.data, '$.providerID') AS provider_id,
@@ -1534,9 +1720,9 @@ function scanOpencodeSessions(dbPath) {
       FROM message m
       JOIN session s ON s.id = m.session_id
       WHERE s.model IS NULL AND json_extract(m.data, '$.modelID') IS NOT NULL
-    `).all();
+    `);
     const messageUsage = new Map();
-    for (const m of messageRows) {
+    for (const m of messageStmt.iterate()) {
       const key = `${m.session_id}::${m.provider_id || 'unknown'}::${m.model_id}`;
       const current = messageUsage.get(key) || {
         sessionID: m.session_id,
@@ -1555,7 +1741,7 @@ function scanOpencodeSessions(dbPath) {
       current.cacheWrite += Number(m.cache_write) || 0;
       messageUsage.set(key, current);
     }
-    for (const r of rows) {
+    for (const r of sessionStmt.iterate()) {
       let ts = Number(r.time_created);
       if (!ts || !Number.isFinite(ts)) continue;
       // Older rows are unix seconds; newer ones are milliseconds.
@@ -1635,16 +1821,65 @@ async function getAccountUsage(account, force) {
 let cache = null;
 let cacheAt = 0;
 const CACHE_MS = 30_000;
+// Heavy scans (Grok's sessions dir alone is >1GB) rerun as little as possible:
+// the in-memory cache deals with rapid polls, the disk cache survives restarts
+// and stops the poll loop from rescanning everything more than every 5 minutes.
+const DISK_CACHE_MS = 5 * 60_000;
+const DISK_CACHE_PATH = path.join(__dirname, 'usage-cache.json');
+
+async function loadDiskCache() {
+  if (!existsSync(DISK_CACHE_PATH)) return null;
+  try {
+    const raw = await readFile(DISK_CACHE_PATH, 'utf8');
+    const data = JSON.parse(raw);
+    if (!data || !Array.isArray(data.accounts)) return null;
+    if (Date.now() - Date.parse(data.fetchedAt) > DISK_CACHE_MS) return null;
+    return data;
+  } catch {
+    return null;
+  }
+}
+
+function saveDiskCache(value) {
+  writeFile(DISK_CACHE_PATH, JSON.stringify(value), 'utf8').catch(() => {});
+}
+
+// Every observation of (limit percentage, cumulative tokens, cumulative cost)
+// is worth keeping: the ledger turns them into the per-percent exchange rate
+// that no provider reports directly. Deduplication lives in the ledger, so
+// calling this on cache hits too costs nothing and closes gaps.
+function noteHistory(usage) {
+  limitHistory.recordSnapshot(usage).catch((e) => {
+    console.error('limit-history: failed to record snapshot:', e.message);
+  });
+}
 
 async function getUsage() {
   const now = Date.now();
   if (cache && now - cacheAt < CACHE_MS) return cache;
+  if (!cache || now - cacheAt >= CACHE_MS) {
+    const disk = await loadDiskCache();
+    if (disk) {
+      cache = disk;
+      cacheAt = now;
+      noteHistory(disk);
+      return cache;
+    }
+  }
 
   const accounts = await detectAccounts();
-  const results = await Promise.all(accounts.map((a) => getAccountUsage(a, false)));
+  // Sequential, not Promise.all: heavy scans (multi-GB session dirs, ccusage
+  // children parsing the Codex/Claude histories) must never overlap, or their
+  // page-cache and heap charges would stack into the gigabytes.
+  const results = [];
+  for (const account of accounts) {
+    results.push(await getAccountUsage(account, false));
+  }
 
   cache = { accounts: results, fetchedAt: new Date().toISOString() };
   cacheAt = now;
+  saveDiskCache(cache);
+  noteHistory(cache);
   return cache;
 }
 
@@ -1679,13 +1914,83 @@ const server = http.createServer(async (req, res) => {
         else if (a.provider === 'antigravity') rateLimits = await getAntigravityRateLimits(a, true);
         return [a.id, rateLimits];
       }));
-      cache = null; // invalidate so the next /api/usage poll picks these up too
+      // Merge the fresh limits into the current cache instead of nulling it:
+      // a manual refresh is only about limits, not about re-scanning the
+      // multi-GB session dirs again.
+      if (typeof cache === 'object' && cache !== null) {
+        for (const [id, limits] of results) {
+          const account = cache.accounts.find((a) => a.id === id);
+          if (account) account.rateLimits = limits;
+        }
+        noteHistory(cache);
+      }
       res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
       res.end(JSON.stringify(Object.fromEntries(results)));
     } catch (e) {
       res.writeHead(500, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: String(e) }));
     }
+    return;
+  }
+
+  // Derived view over the limit ledger: what one percent of each rate-limit
+  // window actually costs in tokens and dollars, per cycle and pooled.
+  if (url.pathname === '/api/limit-history') {
+    try {
+      const data = await limitHistory.analyze({
+        maxStepsPerWindow: Number(url.searchParams.get('steps')) || 400,
+      });
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+      res.end(JSON.stringify(data));
+    } catch (e) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: String(e) }));
+    }
+    return;
+  }
+
+  // Raw ledger rows, for exporting or charting the series directly.
+  if (url.pathname === '/api/limit-history/raw') {
+    try {
+      const acct = url.searchParams.get('account');
+      const win = url.searchParams.get('window');
+      const limit = Number(url.searchParams.get('limit')) || 5000;
+      let rows = [
+        ...(await limitHistory.readRows(limitHistory.BACKFILL_PATH)),
+        ...(await limitHistory.readRows(limitHistory.LEDGER_PATH)),
+      ];
+      if (acct) rows = rows.filter((r) => r.acct === acct);
+      if (win) rows = rows.filter((r) => r.win === win);
+      rows.sort((a, b) => String(a.t).localeCompare(String(b.t)));
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+      res.end(JSON.stringify({ total: rows.length, rows: rows.slice(-limit) }));
+    } catch (e) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: String(e) }));
+    }
+    return;
+  }
+
+  // Codex rollouts are the one local record of historical limit percentages,
+  // so their replay is re-runnable on demand as new sessions accumulate.
+  if (url.pathname === '/api/limit-history/backfill' && req.method === 'POST') {
+    try {
+      const state = await limitHistory.backfillCodex({});
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+      res.end(JSON.stringify(state));
+    } catch (e) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: String(e) }));
+    }
+    return;
+  }
+
+  // Browsers commonly probe this path even when the page declares another
+  // icon. Return an empty success response for stale clients instead of a
+  // noisy 404; current clients use the SVG declared in index.html.
+  if (url.pathname === '/favicon.ico') {
+    res.writeHead(204, { 'Cache-Control': 'public, max-age=86400' });
+    res.end();
     return;
   }
 
@@ -1700,7 +2005,12 @@ const server = http.createServer(async (req, res) => {
   try {
     const content = await readFile(filePath);
     const ext = path.extname(filePath);
-    const type = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css' }[ext] || 'text/plain';
+    const type = {
+      '.html': 'text/html',
+      '.js': 'text/javascript',
+      '.css': 'text/css',
+      '.svg': 'image/svg+xml',
+    }[ext] || 'text/plain';
     res.writeHead(200, { 'Content-Type': type, 'Cache-Control': 'no-store' });
     res.end(content);
   } catch {
@@ -1709,6 +2019,40 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(PORT, HOST, () => {
+// The ledger is only as good as its sampling rate, and a percentage that
+// climbs while nobody has the dashboard open would otherwise be lost. Sampling
+// on the same period as the disk cache keeps the series continuous without
+// making the heavy session scans run any more often than a browser poll would.
+const HISTORY_SAMPLE_MS = Number(process.env.LIMIT_HISTORY_SAMPLE_MS) || DISK_CACHE_MS;
+
+function startHistorySampler() {
+  if (process.env.LIMIT_HISTORY_SAMPLER === 'off') return;
+  const timer = setInterval(() => {
+    getUsage().catch((e) => console.error('limit-history: sampler failed:', e.message));
+  }, HISTORY_SAMPLE_MS);
+  timer.unref();
+}
+
+// Codex transcripts record a percentage after every single turn — far finer
+// than this server's own sampling — so they stay the better record of Codex
+// even while it runs. Replaying them periodically keeps that resolution.
+const BACKFILL_REFRESH_MS = 6 * 60 * 60_000;
+
+async function replayCodexHistory(reason) {
+  try {
+    const s = await limitHistory.backfillCodex({});
+    console.log(`limit-history: ${reason} replayed ${s.rows} rows from ${s.files} Codex rollouts`);
+  } catch (e) {
+    console.error('limit-history: backfill failed:', e.message);
+  }
+}
+
+server.listen(PORT, HOST, async () => {
   console.log(`cc-usage-dashboard listening on http://${HOST}:${PORT}`);
+  const state = await limitHistory.backfillState();
+  const stale = !state || Date.now() - Date.parse(state.ranAt) > BACKFILL_REFRESH_MS;
+  if (stale) replayCodexHistory('startup');
+  const timer = setInterval(() => replayCodexHistory('scheduled'), BACKFILL_REFRESH_MS);
+  timer.unref();
+  startHistorySampler();
 });
