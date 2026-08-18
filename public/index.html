@@ -1000,6 +1000,31 @@
   .eco-table tr:last-child td { border-bottom: 0; }
   .eco-table td.dim { color: var(--ink-faint); }
   .eco-empty { color: var(--ink-dim); font-size: 0.76rem; padding: 0.35rem 0 0; }
+  .eco-details { margin-top: 0.6rem; }
+  .eco-details summary {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    list-style: none;
+    cursor: pointer;
+    user-select: none;
+    padding: 0.3rem 0.7rem;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: var(--surface-2);
+    color: var(--ink-dim);
+    font-size: 0.7rem;
+    font-weight: 500;
+  }
+  .eco-details summary::-webkit-details-marker { display: none; }
+  .eco-details summary::before {
+    content: '▸';
+    font-size: 0.62rem;
+    transition: transform 0.15s var(--ease);
+  }
+  .eco-details[open] summary::before { transform: rotate(90deg); }
+  .eco-details summary:hover { color: var(--ink); border-color: var(--border-strong); }
+  .eco-details .table-scroll { margin-top: 0.5rem; }
   @media (max-width: 640px) {
     .eco-card .stat-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .eco-meter { max-width: none; }
@@ -1715,7 +1740,7 @@ const ECO_MAX_TICKS = 24;
 function ecoChart(win, metric, key) {
   const unit = metric === 'tokens' ? 'Tokens' : 'Dollars';
   const windows = win.cycles.filter(c => ecoRate(c, metric) > 0);
-  if (windows.length >= 2) {
+  if (windows.length >= 1) {
     const items = windows.slice().reverse().map(c => ({
       value: ecoRate(c, metric),
       x: ecoDate(c.to),
@@ -1745,7 +1770,11 @@ function ecoCard(account, win, metric, allowEstimate) {
   const measured = ecoRate(pooled, metric);
   const estimate = ecoEstimate(account, win, metric, allowEstimate);
   const pts = pooled ? pooled.pct : 0;
-  const trusted = measured != null && pts >= ECO_MIN_PCT;
+  // A partial cycle opens mid-window, so its slope skips the spend that
+  // already happened before the ledger base — the rate only becomes
+  // trustworthy once a complete cycle (observed from 0%) is in the pool.
+  const completeCycles = win.cycles.some(c => !c.partial && ecoRate(c, metric) > 0);
+  const trusted = measured != null && pts >= ECO_MIN_PCT && completeCycles;
   const rate = trusted ? measured : (estimate != null ? estimate : measured);
   const mode = trusted ? 'measured' : (estimate != null ? 'estimated' : (measured != null ? 'provisional' : 'none'));
   const pct = win.latest?.pct ?? 0;
@@ -1753,7 +1782,7 @@ function ecoCard(account, win, metric, allowEstimate) {
 
   const why = {
     measured: () => `measured across ${pooled.cycles} window${pooled.cycles === 1 ? '' : 's'} and ${Math.round(pts)} percentage points`,
-    estimated: () => `last 7 days ÷ ${pct}% consumed — a measured rate takes over past ${ECO_MIN_PCT} points`,
+    estimated: () => `last 7 days ÷ ${pct}% consumed — tracking began mid-window, so a measured rate takes over once a full window is seen`,
     provisional: () => `only ${Math.round(pts)} point${Math.round(pts) === 1 ? '' : 's'} measured — whole-number percentages make this imprecise so far`,
     none: () => 'no rate yet — it appears once the percentage moves',
   }[mode]();
@@ -1773,7 +1802,9 @@ function ecoCard(account, win, metric, allowEstimate) {
   ];
 
   const rows = win.cycles.filter(c => ecoRate(c, metric) > 0);
-  const table = rows.length >= 2 ? `<div class="table-scroll"><table class="eco-table">
+  const table = rows.length >= 2 ? `<details class="eco-details">
+      <summary>Window breakdown (${rows.length} entries)</summary>
+      <div class="table-scroll"><table class="eco-table">
       <thead><tr><th>Window</th><th>Span</th><th>Tokens</th><th>Cost</th><th>Tok / 1%</th><th>$ / 1%</th></tr></thead>
       <tbody>${rows.map(c => `<tr>
         <td>${ecoDate(c.from)} – ${ecoDate(c.to)}</td>
@@ -1782,7 +1813,7 @@ function ecoCard(account, win, metric, allowEstimate) {
         <td>${fmt$(c.cost)}</td>
         <td>${ecoFmt(c.tokensPerPct, 'tokens')}</td>
         <td>${ecoFmt(c.costPerPct, 'cost')}</td>
-      </tr>`).join('')}</tbody></table></div>` : '';
+      </tr>`).join('')}</tbody></table></div></details>` : '';
 
   return `<div class="card eco-card" style="--eco-accent:var(${accentVar(account.provider)})">
     <div class="limits-head">
