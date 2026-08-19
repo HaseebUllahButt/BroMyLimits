@@ -1,0 +1,167 @@
+{
+  "accounts": [
+    {
+      "id": "codex-default",
+      "provider": "codex",
+      "label": "default",
+      "today": {
+        "cost": 0,
+        "tokens": 0
+      },
+      "last7d": {
+        "cost": 19.7716822,
+        "tokens": 310995935
+      },
+      "month": {
+        "cost": 260.83073012,
+        "tokens": 1373817620
+      },
+      "allTime": {
+        "cost": 342.75766841000006,
+        "tokens": 1648341930
+      },
+      "rateLimits": {
+        "fetchedAtMs": 1787121985672,
+        "ageMinutes": 0,
+        "live": true,
+        "weekly": {
+          "percent": 32,
+          "resetsAt": "2026-08-20T08:14:14.000Z"
+        },
+        "session": null,
+        "credits": {
+          "balance": 2500,
+          "approxLocalMessages": [
+            625,
+            3250
+          ],
+          "approxCloudMessages": [
+            100,
+            625
+          ]
+        },
+        "resetsAvailable": {
+          "available": 0,
+          "applicableAvailable": 0,
+          "expiresAt": null
+        }
+      },
+      "models": [
+        {
+          "modelName": "gpt-5.6-sol",
+          "provider": "OpenAI",
+          "unpriced": false,
+          "tokens": {
+            "input": 11653910,
+            "output": 1404231,
+            "cacheWrite": 0,
+            "cacheRead": 367515136
+          },
+          "cost": {
+            "input": 58.26955000000001,
+            "output": 42.12693000000001,
+            "cacheWrite": 0,
+            "cacheRead": 183.75756800000005,
+            "total": 284.154048
+          }
+        },
+        {
+          "modelName": "gpt-5.6-luna",
+          "provider": "OpenAI",
+          "unpriced": false,
+          "tokens": {
+            "input": 53591702,
+            "output": 5162019,
+            "cacheWrite": 0,
+            "cacheRead": 1174326528
+          },
+          "cost": {
+            "input": 10.7183404,
+            "output": 6.194422800000001,
+            "cacheWrite": 0,
+            "cacheRead": 23.486530559999988,
+            "total": 40.39929376000001
+          }
+        },
+        {
+          "modelName": "gpt-5.5",
+          "provider": "OpenAI",
+          "unpriced": false,
+          "tokens": {
+            "input": 840181,
+            "output": 34112,
+            "cacheWrite": 0,
+            "cacheRead": 11700608
+          },
+          "cost": {
+            "input": 4.2009050000000006,
+            "output": 1.0233600000000003,
+            "cacheWrite": 0,
+            "cacheRead": 5.850304,
+            "total": 11.074569
+          }
+        },
+        {
+          "modelName": "gpt-5.6-terra",
+          "provider": "OpenAI",
+          "unpriced": false,
+          "tokens": {
+            "input": 712996,
+            "output": 120904,
+            "cacheWrite": 0,
+            "cacheRead": 21090304
+          },
+          "cost": {
+            "input": 1.425992,
+            "output": 1.450848,
+            "cacheWrite": 0,
+            "cacheRead": 4.2180608,
+            "total": 7.0949008
+          }
+        },
+        {
+          "modelName": "gpt-5.4-mini",
+          "provider": "OpenAI",
+          "unpriced": false,
+          "tokens": {
+            "input": 41315,
+            "output": 538,
+            "cacheWrite": 0,
+            "cacheRead": 19328
+          },
+          "cost": {
+            "input": 0.03098625,
+            "output": 0.0024210000000000004,
+            "cacheWrite": 0,
+            "cacheRead": 0.0014496,
+            "total": 0.03485685
+          }
+        },
+        {
+          "modelName": "chatgpt-web/high",
+          "provider": "Google",
+          "unpriced": true,
+          "tokens": {
+            "input": 68142,
+            "output": 72,
+            "cacheWrite": 0,
+            "cacheRead": 59904
+          },
+          "cost": {
+            "input": 0,
+            "output": 0,
+            "cacheWrite": 0,
+            "cacheRead": 0,
+            "total": 0
+          }
+        }
+      ],
+      "usageSources": [
+        "Codex CLI",
+        "Pi (415 Codex responses)",
+        "Prime Agent (1320 Codex responses)"
+      ]
+    }
+  ],
+  "fetchedAt": "2026-08-19T06:46:47.867Z"
+}

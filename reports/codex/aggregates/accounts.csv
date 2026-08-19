@@ -1,0 +1,5 @@
+account_id,provider,label,period,cost_usd,tokens
+codex-default,codex,default,today,0,0
+codex-default,codex,default,last7d,19.7716822,310995935
+codex-default,codex,default,month,260.83073012,1373817620
+codex-default,codex,default,allTime,342.75766841000006,1648341930

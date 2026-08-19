@@ -1,0 +1,7 @@
+account_id,model,provider,route,tokens_input,tokens_output,tokens_cache_write,tokens_cache_read,tokens_reasoning,cost_input,cost_output,cost_cache_write,cost_cache_read,cost_total
+codex-default,gpt-5.6-sol,OpenAI,,11653910,1404231,0,367515136,0,58.26955000000001,42.12693000000001,0,183.75756800000005,284.154048
+codex-default,gpt-5.6-luna,OpenAI,,53591702,5162019,0,1174326528,0,10.7183404,6.194422800000001,0,23.486530559999988,40.39929376000001
+codex-default,gpt-5.5,OpenAI,,840181,34112,0,11700608,0,4.2009050000000006,1.0233600000000003,0,5.850304,11.074569
+codex-default,gpt-5.6-terra,OpenAI,,712996,120904,0,21090304,0,1.425992,1.450848,0,4.2180608,7.0949008
+codex-default,gpt-5.4-mini,OpenAI,,41315,538,0,19328,0,0.03098625,0.0024210000000000004,0,0.0014496,0.03485685
+codex-default,chatgpt-web/high,Google,,68142,72,0,59904,0,0,0,0,0,0

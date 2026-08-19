@@ -1,0 +1,55 @@
+{
+  "report": "Bro My Limits \u2014 Codex usage report (codex-default only)",
+  "scope": "account_id=codex-default (other accounts excluded from raw payloads and aggregates)",
+  "generatedAt": "2026-08-19T06:46:47.867Z",
+  "dashboard": {
+    "url": "http://127.0.0.1:47291",
+    "server": "cc-usage-dashboard (node server.js)"
+  },
+  "rawSources": [
+    "~/.codex/ (Codex CLI local usage logs)"
+  ],
+  "costBasis": "tokens x published provider rates, computed locally; not provider invoices",
+  "files": [
+    {
+      "path": "report.md",
+      "sha256": "e8670f79497adb6c8ac34d0a9740c19ee4d026381067a82e0c57bbe7d27feb9b",
+      "bytes": 3053
+    },
+    {
+      "path": "verify.sh",
+      "sha256": "4568686b9d4a634fe1273f33dcfc8c3c62f7639a7c58f73b5b90be4fb6fd8b67",
+      "bytes": 2440
+    },
+    {
+      "path": "data/limit-history.json",
+      "sha256": "30885462ee5e27c936e2e17bc923e2eee2340480261c62b18831f57c6145b2d7",
+      "bytes": 150498
+    },
+    {
+      "path": "data/usage.json",
+      "sha256": "16e7b4108202ac10b7acd9d05600ded2e34073333f7e80b6e4967727581c202b",
+      "bytes": 4108
+    },
+    {
+      "path": "aggregates/accounts.csv",
+      "sha256": "24ce97382fef1d840974e58e9a6d6f058d46856dd1560a662003523337bf0a86",
+      "bytes": 272
+    },
+    {
+      "path": "aggregates/limit-cycles.csv",
+      "sha256": "55807a4fef27561206267a9a885774dd517861995e5a792608c0e9c5fb044608",
+      "bytes": 2604
+    },
+    {
+      "path": "aggregates/limit-steps.csv",
+      "sha256": "5f4632992d7424065742c48c4330e4b0935ba3d20e964f1170c7414e81ad0eae",
+      "bytes": 36820
+    },
+    {
+      "path": "aggregates/models.csv",
+      "sha256": "b6883afeca3670213c23bdf5dd580ad6dddead107400e80c8d368c9964b1e793",
+      "bytes": 852
+    }
+  ]
+}
