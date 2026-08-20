@@ -2,43 +2,89 @@
 
 Local dashboard for Claude Code, Codex, Grok, Antigravity/Pi, and OpenCode usage.
 
-## Install
+## Windows quick setup
 
-Requires Node.js 20 or newer. From this directory:
+Requires Windows 10/11, Node.js 20 or newer, and Git. Install missing
+requirements with WinGet, then close and reopen PowerShell:
 
-```sh
-./install.sh
+```powershell
+winget install --id OpenJS.NodeJS.LTS -e
+winget install --id Git.Git -e
 ```
 
-To choose a port explicitly:
+### One-line Windows install
+
+Paste this single line into PowerShell. It downloads the latest version to a
+temporary folder and installs the dashboard without requiring administrator
+access:
+
+```powershell
+$ErrorActionPreference='Stop'; $setupDir=Join-Path $env:TEMP ('BroMyLimits-'+[guid]::NewGuid()); git clone --depth 1 https://github.com/HaseebUllahButt/BroMyLimits.git $setupDir; powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $setupDir 'install.ps1') 47291
+```
+
+Start the dashboard and keep the PowerShell window open:
+
+```powershell
+& "$env:LOCALAPPDATA\bin\cc-usage-dashboard.cmd"
+```
+
+Open <http://127.0.0.1:47291>. To use a different default port, replace the
+final `47291` in the install command; the generated launcher remembers it. You
+can also pass a temporary override when starting, such as
+`cc-usage-dashboard.cmd 3000`.
+
+If you already downloaded this repository, install directly from its folder:
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+.\install.ps1 47291
+```
+
+The Windows installation lives in `%LOCALAPPDATA%\cc-usage-dashboard`; its
+launcher is `%LOCALAPPDATA%\bin\cc-usage-dashboard.cmd`. The installer also
+attempts to install `ccusage` locally and configures detected Claude profiles. Add
+`--no-statusline` if you do not want Claude statusline configuration, or
+`--no-browser` if you do not want the installer to open the dashboard URL.
+
+To uninstall and restore backed-up Claude settings:
+
+```powershell
+node "$env:LOCALAPPDATA\cc-usage-dashboard\uninstall.js"
+```
+
+### Build a portable Windows package
+
+Create a self-contained Windows ZIP with Node.js and `ccusage` bundled:
+
+```powershell
+npm run build:windows
+```
+
+The build is written to `dist/cc-usage-dashboard-v<version>-windows-<arch>.zip`.
+After extracting it on another Windows computer, run `start-dashboard.cmd`.
+The portable build does not require Node.js on the target computer.
+
+## Linux and macOS setup
+
+Requires Node.js 20 or newer. From this directory:
 
 ```sh
 ./install.sh 47291
 ```
 
-### One-paste install
-
-Linux or macOS Terminal:
+One-line install:
 
 ```sh
 d="$(mktemp -d)" && git clone --depth 1 https://github.com/HaseebUllahButt/BroMyLimits.git "$d/BroMyLimits" && "$d/BroMyLimits/install.sh" 47291
 ```
 
-Windows PowerShell:
-
-```powershell
-$ErrorActionPreference='Stop'; $d=Join-Path $env:TEMP ('BroMyLimits-'+[guid]::NewGuid()); git clone --depth 1 https://github.com/HaseebUllahButt/BroMyLimits.git $d; powershell -ExecutionPolicy Bypass -File (Join-Path $d 'install.ps1') 47291
-```
-
-On macOS, run `install.sh` in Terminal or double-click `install.command`. On Windows, run `install.ps1` from PowerShell. The installer creates a user-local app directory and launcher, installs `ccusage` locally when npm is available, configures the Claude statusline for every detected Claude profile, enables a user service on Linux/macOS, and opens the dashboard automatically. Use `--skip-deps`, `--no-statusline`, `--no-service`, or `--no-browser` to disable those parts.
+On macOS, run `install.sh` in Terminal or double-click `install.command`. The
+installer creates a user-local app directory and launcher, installs `ccusage`,
+enables a user service, and opens the dashboard. Use `--skip-deps`,
+`--no-statusline`, `--no-service`, or `--no-browser` to disable those parts.
 
 Start it with `cc-usage-dashboard`, then open <http://127.0.0.1:47291>.
-
-To remove the installed service and restore backed-up Claude settings:
-
-```sh
-./uninstall.sh
-```
+Uninstall with `./uninstall.sh` from the source checkout.
 
 ## Limit economics
 
@@ -88,6 +134,26 @@ Every refresh scans for the standard profile directories:
 - Grok: `~/.grok`, `~/.grok-*`
 
 It also honors `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `GROK_CONFIG_DIR`, and `GROK_HOME`. For profiles stored somewhere else, set `CC_USAGE_CONFIG_DIRS` to a comma- or platform-path-separated list before starting the dashboard. New profiles appear without reinstalling or editing a config file.
+
+If an old local profile should not be tracked, disable it before starting the
+dashboard. For example, in PowerShell:
+
+```powershell
+$env:CC_USAGE_DISABLED_PROVIDERS = 'claude'
+& "$env:LOCALAPPDATA\bin\cc-usage-dashboard.cmd"
+```
+
+To keep that choice across new PowerShell windows, set it as a user
+environment variable and then open a new terminal:
+
+```powershell
+[Environment]::SetEnvironmentVariable('CC_USAGE_DISABLED_PROVIDERS', 'claude', 'User')
+```
+
+Use a comma- or semicolon-separated list such as `claude,codex` to disable
+multiple providers. This hides the provider from discovery and does not delete
+its local files. The dashboard's Settings tab can also hide an account visually
+without stopping its background tracking.
 
 The dashboard only reads local usage/session data, except for the provider rate-limit refreshes already exposed by the agents. It does not copy credentials into the dashboard directory.
 
