@@ -1861,9 +1861,10 @@ function limitEconomicsHtml(history) {
     // percentage that explains its totals.
     // One card per account: the weekly window, which is the limit that bites.
     // The estimate needs that window to govern the account's whole usage.
-    const weekly = entry.windows.filter(w => /weekly/.test(w.key));
-    if (weekly.length !== 1) continue;
-    cards.push({ acct: entry.id, html: ecoCard(account, weekly[0], metric, true) });
+    const weekly = entry.windows.find(w => w.key === 'weekly')
+      || entry.windows.find(w => /weekly/.test(w.key));
+    if (!weekly) continue;
+    cards.push({ acct: entry.id, html: ecoCard(account, weekly, metric, true) });
   }
   cards.sort((a, b) => ECO_ACCOUNTS.indexOf(a.acct) - ECO_ACCOUNTS.indexOf(b.acct));
 
@@ -1952,6 +1953,7 @@ function ensureLayout(allAccounts, visibleAccounts) {
       <div class="panel${a.id === activeId ? ' active' : ''}" id="panel-${a.id}" style="--tab-accent:var(${accentVar(a.provider)})">
         <div class="panel-heading"><span class="dot ${dotClass(a.provider)}"></span>${accountTitle(a)}</div>
         ${a.usageSources?.length > 1 ? `<p class="usage-sources">Includes ${a.usageSources.slice(1).map(esc).join(' + ')}</p>` : ''}
+        <p class="limit-stale usage-error" id="usage-error-${a.id}" hidden></p>
         ${a.provider === 'opencode' ? '' : `<div class="card" id="limits-${a.id}"></div>`}
         <div class="stat-row" id="stats-${a.id}"></div>
          <div class="card models-card${a.provider === 'opencode' ? ' opencode-models-card' : ''}">
@@ -1994,6 +1996,11 @@ function render(data) {
     const limitsEl = document.getElementById(`limits-${a.id}`);
     const statsEl = document.getElementById(`stats-${a.id}`);
     const modelsEl = document.getElementById(`models-${a.id}`);
+    const usageErrorEl = document.getElementById(`usage-error-${a.id}`);
+    if (usageErrorEl) {
+      usageErrorEl.textContent = a.usageError ? `Token history unavailable: ${a.usageError}` : '';
+      usageErrorEl.hidden = !a.usageError;
+    }
     if (limitsEl) limitsEl.innerHTML = limitsCard(a, a.rateLimits);
     if (statsEl) statsEl.innerHTML = statRow(a);
     if (modelsEl) {

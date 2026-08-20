@@ -3,6 +3,10 @@
   "version": "0.2.0",
   "private": true,
   "description": "Local usage dashboard for Claude Code and other coding agents",
+  "scripts": {
+    "build:windows": "powershell -NoProfile -ExecutionPolicy Bypass -File ./build-windows.ps1",
+    "test": "node --test"
+  },
   "engines": {
     "node": ">=20"
   },
