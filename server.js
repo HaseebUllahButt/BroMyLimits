@@ -1,6 +1,6 @@
 const http = require('node:http');
 const { exec, execFile } = require('node:child_process');
-const { readFile, readdir, writeFile } = require('node:fs/promises');
+const { readFile, readdir, stat, writeFile } = require('node:fs/promises');
 const { existsSync, createReadStream } = require('node:fs');
 const readline = require('node:readline');
 const path = require('node:path');
@@ -25,12 +25,17 @@ const DATA_HOME = process.env.XDG_DATA_HOME || (process.platform === 'win32'
     ? path.join(HOME, 'Library', 'Application Support')
     : path.join(HOME, '.local', 'share'));
 const OPENCODE_DB = process.env.OPENCODE_DB || path.join(DATA_HOME, 'opencode', 'opencode.db');
+const ANTIGRAVITY_DATA_DIR = process.env.ANTIGRAVITY_DATA_DIR
+  || path.join(HOME, '.gemini', 'antigravity-cli');
 const LOCAL_CCUSAGE = path.join(__dirname, 'node_modules', '.bin', process.platform === 'win32' ? 'ccusage.cmd' : 'ccusage');
 const CCUSAGE_BIN = process.env.CCUSAGE_BIN || (existsSync(LOCAL_CCUSAGE) ? LOCAL_CCUSAGE : (process.platform === 'win32' ? 'ccusage.cmd' : 'ccusage'));
 
 // --- Account discovery -----------------------------------------------------
 async function detectAccounts() {
-  const accounts = await detectProfileAccounts();
+  const discovered = await detectProfileAccounts();
+  const activeClaude = await selectActiveClaudeAccount(discovered);
+  const accounts = discovered.filter((account) => account.provider !== 'claude');
+  if (activeClaude) accounts.push(activeClaude);
   const antigravityAuth = await readAntigravityAuth();
   if (antigravityAuth) {
     accounts.push({
@@ -46,6 +51,34 @@ async function detectAccounts() {
     accounts.push({ id: 'opencode-default', provider: 'opencode', label: 'default', dbPath: OPENCODE_DB });
   } catch {}
   return accounts;
+}
+
+// The dashboard is an overview of the profile currently in use, not an
+// archive of every Claude login directory on disk. An explicit service/CLI
+// environment wins; otherwise the freshest statusline/config snapshot is the
+// best durable signal of which profile Claude Code used most recently.
+async function selectActiveClaudeAccount(accounts) {
+  const claudeAccounts = accounts.filter((account) => account.provider === 'claude');
+  if (claudeAccounts.length <= 1) return claudeAccounts[0] || null;
+
+  if (process.env.CLAUDE_CONFIG_DIR) {
+    const explicit = path.resolve(process.env.CLAUDE_CONFIG_DIR);
+    const match = claudeAccounts.find((account) => path.resolve(account.configDir) === explicit);
+    if (match) return match;
+  }
+
+  const ranked = await Promise.all(claudeAccounts.map(async (account) => {
+    const cached = await getCachedClaudeRateLimits(account).catch(() => null);
+    if (Number(cached?.fetchedAtMs) > 0) return { account, activityMs: Number(cached.fetchedAtMs) };
+    try {
+      const info = await stat(account.configDir);
+      return { account, activityMs: info.mtimeMs };
+    } catch {
+      return { account, activityMs: 0 };
+    }
+  }));
+  ranked.sort((a, b) => b.activityMs - a.activityMs || a.account.label.localeCompare(b.account.label));
+  return ranked[0].account;
 }
 
 // --- Antigravity / Google Cloud Code Assist rate limits -------------------
@@ -430,14 +463,33 @@ async function fetchLiveCodexRateLimits(accessToken, chatgptAccountId) {
         expiresAt: availableResetCredits[0]?.expires_at || null,
       }
     : null;
+  // primary_window / secondary_window position is NOT stable — Codex has
+  // swapped which window is primary vs secondary (5h was secondary before,
+  // primary now). Classify by window duration instead: 300 min (18000s) is
+  // the 5h session window, 10080 min (604800s) is the weekly window.
+  const windows = [u.rate_limit?.primary_window, u.rate_limit?.secondary_window].filter(Boolean);
+  let weekly = null;
+  let session = null;
+  for (const w of windows) {
+    const secs = Number(w.limit_window_seconds) || Number(w.window_minutes) * 60 || 0;
+    const entry = toEntry(w);
+    if (secs >= 604800 - 3600) weekly = entry;
+    else if (secs >= 300 * 60 - 60) session = entry;
+    else {
+      // Fallback for old payloads that lack duration: treat first as weekly
+      if (!weekly) weekly = entry;
+      else if (!session) session = entry;
+    }
+  }
+  // Extremely old payloads only sent primary_window (weekly) — keep that
+  // assignment when no duration is present and only one window exists.
+  if (!weekly && !session && windows.length === 1) weekly = toEntry(windows[0]);
   return {
     fetchedAtMs: Date.now(),
     ageMinutes: 0,
     live: true,
-    // primary_window is the weekly lane; secondary_window (5h session) is
-    // only populated once you've actually hit that window this cycle.
-    weekly: toEntry(u.rate_limit?.primary_window),
-    session: toEntry(u.rate_limit?.secondary_window),
+    weekly,
+    session,
     credits,
     resetsAvailable,
   };
@@ -1146,6 +1198,15 @@ function summarize(daily, costKey = 'totalCost') {
     last7d: { cost: sumCost(last7, costKey), tokens: sumTokens(last7) },
     month: { cost: sumCost(thisMonth, costKey), tokens: sumTokens(thisMonth) },
     allTime: { cost: sumCost(sorted, costKey), tokens: sumTokens(sorted) },
+    // Keep the compact summaries used by the web UI, but also expose the
+    // daily series so small native clients (such as the Omarchy panel) do not
+    // need to rescan every provider's private storage independently.
+    daily: sorted.map((row) => ({
+      date: row.period ?? row.date,
+      cost: row[costKey] ?? row.costUSD ?? 0,
+      tokens: sumTokens([row]),
+      unpriced: row.unpriced === true,
+    })),
   };
 }
 
@@ -1614,8 +1675,19 @@ const ANTIGRAVITY_PRICING = {
   'gpt-oss-120b': { input: 1.0, cachedInput: 0.1, output: 6.0 },
 };
 
+function normalizeAntigravityModelName(modelName) {
+  const name = String(modelName || 'unknown').replace(/-\d{4}-\d{2}-\d{2}$/, '');
+  if (/^gemini-3\.7-flash(?:-exp)?(?:-agent)?(?:-a)?$/.test(name)) return 'gemini-3.7-flash';
+  if (/^gemini-3\.6-flash(?:-tiered)?$/.test(name)) return 'gemini-3.6-flash';
+  if (/^gemini-3\.5-flash(?:-extra-low|-low)?$/.test(name)) return 'gemini-3.5-flash';
+  if (/^gemini-3\.1-pro(?:-low)?$/.test(name)) return 'gemini-3.1-pro';
+  if (/^claude-(?:opus|sonnet)-4-6-thinking$/.test(name)) return name.replace(/-thinking$/, '');
+  if (name === 'gpt-oss-120b-medium') return 'gpt-oss-120b';
+  return name;
+}
+
 function antigravityModelCost(modelName, u) {
-  const base = modelName.replace(/-\d{4}-\d{2}-\d{2}$/, '');
+  const base = normalizeAntigravityModelName(modelName);
   const r = ANTIGRAVITY_PRICING[base] || { input: 0.75, cachedInput: 0.1875, output: 3.75 };
   return {
     input: ((u.input || 0) * r.input) / 1_000_000,
@@ -1623,6 +1695,194 @@ function antigravityModelCost(modelName, u) {
     cacheWrite: 0,
     cacheRead: ((u.cacheRead || 0) * r.cachedInput) / 1_000_000,
   };
+}
+
+// Antigravity CLI stores response usage in protobuf blobs inside one SQLite
+// database per conversation. These helpers decode only the documented fields
+// needed for usage; message content is never loaded or exposed.
+function protoVarint(buffer, start) {
+  let value = 0n;
+  let shift = 0n;
+  for (let pos = start; pos < buffer.length && pos < start + 10; pos++) {
+    const byte = BigInt(buffer[pos]);
+    value |= (byte & 0x7fn) << shift;
+    if ((byte & 0x80n) === 0n) return { value: Number(value), next: pos + 1 };
+    shift += 7n;
+  }
+  return null;
+}
+
+function protoField(buffer, wanted, wantedWire) {
+  let pos = 0;
+  while (pos < buffer.length) {
+    const tag = protoVarint(buffer, pos);
+    if (!tag) return null;
+    pos = tag.next;
+    const field = Math.floor(tag.value / 8);
+    const wire = tag.value & 7;
+    let value;
+    if (wire === 0) {
+      const decoded = protoVarint(buffer, pos);
+      if (!decoded) return null;
+      value = decoded.value;
+      pos = decoded.next;
+    } else if (wire === 1) {
+      if (pos + 8 > buffer.length) return null;
+      value = buffer.subarray(pos, pos + 8);
+      pos += 8;
+    } else if (wire === 2) {
+      const length = protoVarint(buffer, pos);
+      if (!length || length.value < 0 || pos + (length.next - pos) + length.value > buffer.length) return null;
+      pos = length.next;
+      value = buffer.subarray(pos, pos + length.value);
+      pos += length.value;
+    } else if (wire === 5) {
+      if (pos + 4 > buffer.length) return null;
+      value = buffer.subarray(pos, pos + 4);
+      pos += 4;
+    } else {
+      return null;
+    }
+    if (field === wanted && (wantedWire == null || wire === wantedWire)) return value;
+  }
+  return null;
+}
+
+const protoMessage = (buffer, field) => protoField(buffer, field, 2);
+const protoInt = (buffer, field) => protoField(buffer, field, 0);
+
+function decodeAntigravityModelMetadata(data) {
+  // Older layout: f1.f3 enum and f1.f19 model. Newer: f3.f1 and f3.f28.
+  const oldInner = protoMessage(data, 1);
+  const newInner = protoMessage(data, 3);
+  for (const [inner, enumField, nameField] of [[oldInner, 3, 19], [newInner, 1, 28]]) {
+    if (!inner) continue;
+    const modelEnum = protoInt(inner, enumField);
+    const nameBytes = protoMessage(inner, nameField);
+    if (modelEnum != null && nameBytes?.length) {
+      return [modelEnum, Buffer.from(nameBytes).toString('utf8').trim()];
+    }
+  }
+  return null;
+}
+
+const ANTIGRAVITY_MODEL_ENUMS = new Map([
+  [342, 'gpt-oss-120b-medium'],
+  [1020, 'gemini-3.5-flash-low'],
+  [1026, 'claude-opus-4-6-thinking'],
+  [1035, 'claude-sonnet-4-6'],
+  [1036, 'gemini-3.1-pro-low'],
+  [1132, 'gemini-3.7-flash-agent'],
+  [1187, 'gemini-3.5-flash-extra-low'],
+  [1196, 'gemini-3.6-flash-tiered'],
+]);
+
+function decodeAntigravityStep(payload) {
+  const event = protoMessage(payload, 5);
+  const usage = event && protoMessage(event, 9);
+  const timestamp = event && protoMessage(event, 1);
+  if (!usage || !timestamp) return null;
+  const seconds = protoInt(timestamp, 1);
+  const modelEnum = protoInt(usage, 1);
+  if (!seconds || modelEnum == null) return null;
+  return {
+    timestampMs: seconds * 1000 + Math.floor((protoInt(timestamp, 2) || 0) / 1_000_000),
+    modelEnum,
+    output: protoInt(usage, 2) || 0,
+    reasoning: protoInt(usage, 3) || 0,
+    cumulativeInput: protoInt(usage, 5) || 0,
+  };
+}
+
+async function scanNativeAntigravitySessions() {
+  if (!DatabaseSync) return { daily: [], models: [] };
+  const conversationsDir = path.join(ANTIGRAVITY_DATA_DIR, 'conversations');
+  const byDate = new Map();
+  const byModel = new Map();
+  let files;
+  try { files = await readdir(conversationsDir); } catch { return { daily: [], models: [] }; }
+
+  for (const file of files) {
+    if (!file.endsWith('.db') || file === 'conversation_summaries.db') continue;
+    let db;
+    try {
+      db = new DatabaseSync(path.join(conversationsDir, file), { readOnly: true });
+      const modelMap = new Map(ANTIGRAVITY_MODEL_ENUMS);
+      for (const row of db.prepare('SELECT data FROM gen_metadata ORDER BY idx').iterate()) {
+        const pair = decodeAntigravityModelMetadata(row.data);
+        if (pair?.[1]) modelMap.set(pair[0], pair[1]);
+      }
+      const steps = [...db.prepare(
+        'SELECT step_type, step_payload FROM steps WHERE step_type IN (15, 23) ORDER BY idx',
+      ).iterate()].map((row) => ({ type: Number(row.step_type), usage: decodeAntigravityStep(row.step_payload) }))
+        .filter((row) => row.usage);
+      const modelCounts = new Map();
+      for (const row of steps) {
+        if (row.type === 15) modelCounts.set(row.usage.modelEnum, (modelCounts.get(row.usage.modelEnum) || 0) + 1);
+      }
+      const primaryEnum = [...modelCounts].sort((a, b) => b[1] - a[1])[0]?.[0];
+      let previousInput = null;
+      for (const row of steps) {
+        const u = row.usage;
+        const input = previousInput == null ? u.cumulativeInput : Math.max(0, u.cumulativeInput - previousInput);
+        previousInput = u.cumulativeInput;
+        const resolvedEnum = modelMap.has(u.modelEnum) ? u.modelEnum : primaryEnum;
+        const modelName = normalizeAntigravityModelName(modelMap.get(resolvedEnum) || String(u.modelEnum));
+        const date = new Date(u.timestampMs).toISOString().slice(0, 10);
+        const totalTokens = input + u.output + u.reasoning;
+        const cost = antigravityModelCost(modelName, { input, output: u.output + u.reasoning, cacheRead: 0 });
+        const totalCost = cost.input + cost.output;
+
+        const day = byDate.get(date) || { date, costUSD: 0, totalTokens: 0, unpriced: false };
+        day.costUSD += totalCost;
+        day.totalTokens += totalTokens;
+        byDate.set(date, day);
+
+        const cur = byModel.get(modelName) || blankBreakdown(modelName, providerOf(modelName));
+        cur.tokens.input += input;
+        cur.tokens.output += u.output;
+        cur.tokens.reasoning = (cur.tokens.reasoning || 0) + u.reasoning;
+        cur.cost.input += cost.input;
+        cur.cost.output += cost.output;
+        cur.cost.total += totalCost;
+        byModel.set(modelName, cur);
+      }
+    } catch {
+      // A conversation may be mid-write. Skip it for this poll and retry on
+      // the next one instead of failing the entire dashboard.
+    } finally {
+      try { db?.close(); } catch {}
+    }
+  }
+  return {
+    daily: [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date)),
+    models: [...byModel.values()].sort((a, b) => {
+      const tokens = (m) => m.tokens.input + m.tokens.output + (m.tokens.reasoning || 0);
+      return tokens(b) - tokens(a);
+    }),
+  };
+}
+
+function mergeAntigravityUsage(...scans) {
+  const byDate = new Map();
+  const byModel = new Map();
+  for (const scan of scans) {
+    for (const row of scan.daily) {
+      const cur = byDate.get(row.date) || { date: row.date, costUSD: 0, totalTokens: 0, unpriced: false };
+      cur.costUSD += row.costUSD || 0;
+      cur.totalTokens += row.totalTokens || 0;
+      byDate.set(row.date, cur);
+    }
+    for (const model of scan.models) {
+      const cur = byModel.get(model.modelName) || blankBreakdown(model.modelName, model.provider);
+      for (const key of ['input', 'output', 'cacheWrite', 'cacheRead', 'reasoning']) {
+        cur.tokens[key] = (cur.tokens[key] || 0) + (model.tokens[key] || 0);
+      }
+      for (const key of ['input', 'output', 'cacheWrite', 'cacheRead', 'total']) cur.cost[key] += model.cost[key] || 0;
+      byModel.set(model.modelName, cur);
+    }
+  }
+  return { daily: [...byDate.values()], models: [...byModel.values()] };
 }
 
 async function scanPiAntigravitySessions() {
@@ -1638,26 +1898,36 @@ async function scanPiAntigravitySessions() {
       for (const file of files) {
         if (!file.endsWith('.jsonl')) continue;
         await forEachLine(path.join(dirPath, file), (line) => {
-          if (!line.includes('antigravity') || !line.includes('"assistant"')) return;
+          if (!line.includes('"assistant"')) return;
           let o;
           try { o = JSON.parse(line); } catch { return; }
           if (o.type !== 'message' || o.message?.role !== 'assistant') return;
-          if (o.message?.provider !== 'antigravity') return;
+          // Pi has used both the provider field and the API field to identify
+          // Cloud Code Assist records across releases. Accept either, while
+          // still excluding ordinary Gemini/Claude sessions from elsewhere.
+          if (o.message?.provider !== 'antigravity' && o.message?.api !== 'antigravity-api') return;
           const u = o.message.usage;
           if (!u) return;
 
-          const date = (o.timestamp || o.message.timestamp || '').slice(0, 10);
+          const rawTimestamp = o.timestamp || o.message.timestamp;
+          const timestamp = typeof rawTimestamp === 'number'
+            ? new Date(rawTimestamp > 1e12 ? rawTimestamp : rawTimestamp * 1000).toISOString()
+            : String(rawTimestamp || '');
+          const date = timestamp.slice(0, 10);
           if (!date) return;
 
-          const modelName = o.message.model || 'gemini-3.6-flash';
-          const cost = antigravityModelCost(modelName, u);
+          const inputTok = Number(u.input ?? u.inputTokens) || 0;
+          const outputTok = Number(u.output ?? u.outputTokens) || 0;
+          const cacheReadTok = Number(u.cacheRead ?? u.cacheReadTokens) || 0;
+          const cacheWriteTok = Number(u.cacheWrite ?? u.cacheWriteTokens) || 0;
+          const totTok = Number(u.totalTokens) || (inputTok + outputTok + cacheReadTok + cacheWriteTok);
+          const modelName = normalizeAntigravityModelName(o.message.model || 'gemini-3.6-flash');
+          const cost = antigravityModelCost(modelName, {
+            input: inputTok,
+            output: outputTok,
+            cacheRead: cacheReadTok,
+          });
           const totalCost = cost.input + cost.output + cost.cacheRead;
-
-          const inputTok = u.input || 0;
-          const outputTok = u.output || 0;
-          const cacheReadTok = u.cacheRead || 0;
-          const cacheWriteTok = u.cacheWrite || 0;
-          const totTok = u.totalTokens || (inputTok + outputTok + cacheReadTok);
 
           const day = byDate.get(date) || { date, costUSD: 0, totalTokens: 0, unpriced: false };
           day.costUSD += totalCost;
@@ -1685,13 +1955,15 @@ async function scanPiAntigravitySessions() {
 }
 
 async function getAntigravityAccountUsage(account, force) {
-  const [rateLimits, piUsage] = await Promise.all([
+  const [rateLimits, piUsage, nativeUsage] = await Promise.all([
     getAntigravityRateLimits(account, force),
     scanPiAntigravitySessions(),
+    scanNativeAntigravitySessions(),
   ]);
-  const section = summarize(piUsage.daily, 'costUSD');
+  const usage = mergeAntigravityUsage(piUsage, nativeUsage);
+  const section = summarize(usage.daily, 'costUSD');
   section.rateLimits = rateLimits;
-  section.models = piUsage.models;
+  section.models = usage.models;
   section.planLabel = rateLimits?.planLabel || null;
   return section;
 }
@@ -1719,6 +1991,37 @@ function opencodeProviderName(providerID) {
         : providerID === 'xai' ? 'xAI'
           : providerID === 'github-copilot' ? 'GitHub Copilot'
           : providerID || 'Unknown';
+}
+
+// Official DeepSeek API list prices, USD per million tokens (checked
+// 2026-08-19). Peak hours are 01:00-04:00 and 06:00-10:00 UTC; all other
+// hours use the off-peak rate. OpenCode Zen's `-free` route records $0,
+// but the dashboard intentionally shows the equivalent public API value so
+// free/subscription usage can be compared with the other coding agents.
+const OPENCODE_DEEPSEEK_PRICING = {
+  'deepseek-v4-flash': {
+    offPeak: { input: 0.22, cachedInput: 0.007, output: 0.66 },
+    peak: { input: 0.44, cachedInput: 0.014, output: 1.32 },
+  },
+  'deepseek-v4-pro': {
+    offPeak: { input: 0.66, cachedInput: 0.022, output: 1.98 },
+    peak: { input: 1.32, cachedInput: 0.044, output: 3.96 },
+  },
+};
+
+function opencodeDeepseekCost(modelName, usage, timestampMs) {
+  const base = String(modelName || '').replace(/-free$/, '').replace(/-\d{4}-\d{2}-\d{2}$/, '');
+  const pricing = OPENCODE_DEEPSEEK_PRICING[base];
+  if (!pricing) return null;
+  const hour = new Date(timestampMs).getUTCHours();
+  const isPeak = (hour >= 1 && hour < 4) || (hour >= 6 && hour < 10);
+  const rates = isPeak ? pricing.peak : pricing.offPeak;
+  return {
+    input: ((usage.input || 0) * rates.input) / 1_000_000,
+    output: (((usage.output || 0) + (usage.reasoning || 0)) * rates.output) / 1_000_000,
+    cacheWrite: 0,
+    cacheRead: ((usage.cacheRead || 0) * rates.cachedInput) / 1_000_000,
+  };
 }
 
 function scanOpencodeSessions(dbPath) {
@@ -1773,7 +2076,7 @@ function scanOpencodeSessions(dbPath) {
       const parsedModel = parseOpencodeModel(r.model);
       const modelName = parsedModel?.id || r.agent || 'unknown';
       const providerID = parsedModel?.providerID || 'unknown';
-      const cost = Number(r.cost) || 0;
+      const billedCost = Number(r.cost) || 0;
       const input = Number(r.tokens_input) || 0;
       const output = Number(r.tokens_output) || 0;
       const reasoning = Number(r.tokens_reasoning) || 0;
@@ -1782,18 +2085,27 @@ function scanOpencodeSessions(dbPath) {
       const totalTokens = input + output + reasoning + cacheWrite + cacheRead;
 
       const day = byDate.get(date) || { date, costUSD: 0, totalTokens: 0, unpriced: false };
-      day.costUSD += cost;
-      day.totalTokens += totalTokens;
-      byDate.set(date, day);
-
       const sessionTokens = input + output + reasoning + cacheWrite + cacheRead;
       const messageModels = parsedModel
         ? [{ modelName, providerID, input, output, reasoning, cacheRead, cacheWrite }]
         : [...messageUsage.values()].filter((m) => m.sessionID === r.id);
       const parts = messageModels.length ? messageModels : [{ modelName, providerID, input, output, reasoning, cacheRead, cacheWrite }];
-      for (const part of parts) {
+      const apiCosts = parts.map((part) => opencodeDeepseekCost(part.modelName, part, ts * 1000));
+      const apiCostTotal = apiCosts.reduce((sum, item) => sum + (item
+        ? item.input + item.output + item.cacheWrite + item.cacheRead
+        : 0), 0);
+      const effectiveSessionCost = billedCost || apiCostTotal;
+      day.costUSD += effectiveSessionCost;
+      day.totalTokens += totalTokens;
+      byDate.set(date, day);
+
+      for (let partIndex = 0; partIndex < parts.length; partIndex++) {
+        const part = parts[partIndex];
         const partTokens = part.input + part.output + part.reasoning + part.cacheRead + part.cacheWrite;
-        const costShare = sessionTokens ? cost * (partTokens / sessionTokens) : cost / parts.length;
+        const apiCost = apiCosts[partIndex];
+        const costShare = billedCost
+          ? (sessionTokens ? billedCost * (partTokens / sessionTokens) : billedCost / parts.length)
+          : apiCost ? apiCost.input + apiCost.output + apiCost.cacheWrite + apiCost.cacheRead : 0;
         const modelKey = `${part.providerID}::${part.modelName}`;
         const cur = byModel.get(modelKey) || blankBreakdown(part.modelName, providerOf(part.modelName));
         cur.provider = opencodeProviderName(part.providerID);
@@ -1803,7 +2115,14 @@ function scanOpencodeSessions(dbPath) {
         cur.tokens.reasoning = (cur.tokens.reasoning || 0) + part.reasoning;
         cur.tokens.cacheRead += part.cacheRead;
         cur.tokens.cacheWrite += part.cacheWrite;
+        if (apiCost && !billedCost) {
+          cur.cost.input += apiCost.input;
+          cur.cost.output += apiCost.output;
+          cur.cost.cacheWrite += apiCost.cacheWrite;
+          cur.cost.cacheRead += apiCost.cacheRead;
+        }
         cur.cost.total += costShare;
+        if (apiCost && !billedCost) cur.pricingSource = 'DeepSeek API equivalent (peak/off-peak)';
         byModel.set(modelKey, cur);
       }
     }

@@ -304,10 +304,14 @@ async function backfillCodex({ sessionsDir, accountId = 'codex-default' } = {}) 
     tok += e.tokens;
     cost += e.cost;
     if (!e.t) continue;
+    // Classify strictly by window duration, not by primary/secondary
+    // position — Codex has swapped which lane is primary vs secondary.
+    // 300 min = 5h session, 10080 min = weekly.
+    const classifyKey = (minutes) => (Number(minutes) >= 10080 ? 'weekly' : 'session');
     const windows = [];
     if (e.primary && typeof e.primary.used_percent === 'number') {
       windows.push({
-        key: e.primary.window_minutes >= 10080 ? 'weekly' : 'session',
+        key: classifyKey(e.primary.window_minutes),
         label: windowLabelFor(e.primary.window_minutes),
         pct: e.primary.used_percent,
         resetsAt: e.primary.resets_at ? new Date(e.primary.resets_at * 1000).toISOString() : null,
@@ -315,11 +319,16 @@ async function backfillCodex({ sessionsDir, accountId = 'codex-default' } = {}) 
     }
     if (e.secondary && typeof e.secondary.used_percent === 'number') {
       windows.push({
-        key: e.secondary.window_minutes >= 10080 ? 'weekly-secondary' : 'session',
+        key: classifyKey(e.secondary.window_minutes),
         label: windowLabelFor(e.secondary.window_minutes),
         pct: e.secondary.used_percent,
         resetsAt: e.secondary.resets_at ? new Date(e.secondary.resets_at * 1000).toISOString() : null,
       });
+    }
+    // Deduplicate when both lanes report the same window kind (e.g. two
+    // weekly entries after a swap) — keep the latest pct for that t.
+    if (windows.length === 2 && windows[0].key === windows[1].key) {
+      windows.splice(0, 1);
     }
     for (const w of windows) {
       const row = {

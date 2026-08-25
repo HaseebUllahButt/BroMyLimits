@@ -64,7 +64,10 @@ async function installFiles() {
       const relative = path.relative(sourceDir, source);
       return !relative.startsWith('node_modules')
         && !relative.startsWith('.git')
-        && !/^((claude|grok)-live-limits-.*\.json)$/.test(path.basename(source));
+        && !/^((claude|grok)-live-limits-.*\.json)$/.test(path.basename(source))
+        && !relative.startsWith('limit-history')
+        && !relative.startsWith('usage-cache')
+        && relative !== 'grok-live-limits-grok-default.json';
     },
   });
 }

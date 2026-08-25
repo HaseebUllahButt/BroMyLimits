@@ -1367,12 +1367,17 @@ function statRow(section) {
   if (section.usageTracked === false) {
     return '<p class="empty">Antigravity exposes quota limits, not local cost history.</p>';
   }
-  const items = [
-    { label: 'Today', value: fmt$(section.today.cost), sub: fmtTok(section.today.tokens) + ' tokens' },
-    { label: 'Last 7 days', value: fmt$(section.last7d.cost), sub: fmtTok(section.last7d.tokens) + ' tokens' },
-    { label: 'This month', value: fmt$(section.month.cost), sub: fmtTok(section.month.tokens) + ' tokens' },
-    { label: 'All time', value: fmt$(section.allTime.cost), sub: fmtTok(section.allTime.tokens) + ' tokens' },
+  const periods = [
+    { label: 'Today', data: section.today },
+    { label: 'Last 7 days', data: section.last7d },
+    { label: 'This month', data: section.month },
+    { label: 'All time', data: section.allTime },
   ];
+  const items = periods.map(period => ({
+    label: period.label,
+    value: fmt$(period.data.cost),
+    sub: fmtTok(period.data.tokens) + ' tokens',
+  }));
   return items.map(s => `
     <div class="stat">
       <div class="label">${s.label}</div>
@@ -1999,7 +2004,7 @@ function render(data) {
     if (modelsEl) {
       const tableOpts = a.provider === 'grok'
         ? { cacheWriteLabel: 'Reasoning', cacheReadLabel: 'Cache read' }
-        : a.provider === 'opencode'
+        : a.provider === 'opencode' || a.provider === 'antigravity'
           ? { cacheWriteLabel: 'Reasoning', cacheReadLabel: 'Cache read', reasoningColumn: true }
           : {};
       modelsEl.innerHTML = modelTable(a.models || [], tableOpts);
