@@ -30,6 +30,17 @@ function splitConfiguredPaths(value) {
     .filter(Boolean);
 }
 
+function disabledProviders(value = process.env.CC_USAGE_DISABLED_PROVIDERS) {
+  return new Set(String(value || '')
+    .split(/[;,]/)
+    .map((item) => item.trim().toLowerCase())
+    .filter(Boolean));
+}
+
+function isProviderDisabled(provider, disabled = disabledProviders()) {
+  return disabled.has('all') || disabled.has(provider);
+}
+
 async function directoryNames(dir) {
   try {
     return new Set(await readdir(dir));
@@ -95,6 +106,7 @@ async function detectProfileAccounts() {
   const accounts = [];
   const seenPaths = new Set();
   const usedIds = new Set();
+  const disabled = disabledProviders();
 
   let entries = [];
   try {
@@ -107,11 +119,11 @@ async function detectProfileAccounts() {
     if (!entry.isDirectory()) continue;
     const name = entry.name;
     const dir = path.join(home, name);
-    if (/^\.claude(?:-.+)?$/.test(name)) {
+    if (/^\.claude(?:-.+)?$/.test(name) && !isProviderDisabled('claude', disabled)) {
       await addProfile(accounts, seenPaths, usedIds, 'claude', dir);
-    } else if (/^\.codex(?:-.+)?$/.test(name)) {
+    } else if (/^\.codex(?:-.+)?$/.test(name) && !isProviderDisabled('codex', disabled)) {
       await addProfile(accounts, seenPaths, usedIds, 'codex', dir);
-    } else if (/^\.grok(?:-.+)?$/.test(name)) {
+    } else if (/^\.grok(?:-.+)?$/.test(name) && !isProviderDisabled('grok', disabled)) {
       await addProfile(accounts, seenPaths, usedIds, 'grok', dir);
     }
   }
@@ -124,7 +136,7 @@ async function detectProfileAccounts() {
     ['grok', 'GROK_CONFIG_DIR'],
     ['grok', 'GROK_HOME'],
   ]) {
-    if (process.env[envName]) {
+    if (process.env[envName] && !isProviderDisabled(provider, disabled)) {
       await addProfile(accounts, seenPaths, usedIds, provider, process.env[envName], { requireMarkers: false });
     }
   }
@@ -141,10 +153,19 @@ async function detectProfileAccounts() {
       : /^\.grok(?:-|$)/.test(name)
         ? 'grok'
         : 'claude';
-    await addProfile(accounts, seenPaths, usedIds, provider, dir, { requireMarkers: false });
+    if (!isProviderDisabled(provider, disabled)) {
+      await addProfile(accounts, seenPaths, usedIds, provider, dir, { requireMarkers: false });
+    }
   }
 
   return accounts.sort((a, b) => a.provider.localeCompare(b.provider) || a.label.localeCompare(b.label));
 }
 
-module.exports = { detectProfileAccounts, expandPath, getHomeDir, splitConfiguredPaths };
+module.exports = {
+  detectProfileAccounts,
+  disabledProviders,
+  expandPath,
+  getHomeDir,
+  isProviderDisabled,
+  splitConfiguredPaths,
+};

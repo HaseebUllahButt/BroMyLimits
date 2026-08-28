@@ -4,7 +4,8 @@ const { readFile, readdir, stat, writeFile } = require('node:fs/promises');
 const { existsSync, createReadStream } = require('node:fs');
 const readline = require('node:readline');
 const path = require('node:path');
-const { detectProfileAccounts, getHomeDir } = require('./profile-discovery');
+const { detectProfileAccounts, getHomeDir, isProviderDisabled } = require('./profile-discovery');
+const { resolveCcusageCommand, runCcusage: runCcusageCommand } = require('./ccusage-runner');
 const limitHistory = require('./limit-history');
 
 let DatabaseSync;
@@ -27,8 +28,7 @@ const DATA_HOME = process.env.XDG_DATA_HOME || (process.platform === 'win32'
 const OPENCODE_DB = process.env.OPENCODE_DB || path.join(DATA_HOME, 'opencode', 'opencode.db');
 const ANTIGRAVITY_DATA_DIR = process.env.ANTIGRAVITY_DATA_DIR
   || path.join(HOME, '.gemini', 'antigravity-cli');
-const LOCAL_CCUSAGE = path.join(__dirname, 'node_modules', '.bin', process.platform === 'win32' ? 'ccusage.cmd' : 'ccusage');
-const CCUSAGE_BIN = process.env.CCUSAGE_BIN || (existsSync(LOCAL_CCUSAGE) ? LOCAL_CCUSAGE : (process.platform === 'win32' ? 'ccusage.cmd' : 'ccusage'));
+const CCUSAGE_BIN = resolveCcusageCommand();
 
 // --- Account discovery -----------------------------------------------------
 async function detectAccounts() {
@@ -1163,22 +1163,7 @@ async function forEachLine(filePath, onLine) {
 }
 
 function runCcusage(args, env) {
-  return new Promise((resolve, reject) => {
-    execFile(CCUSAGE_BIN, args, {
-      maxBuffer: 1024 * 1024 * 32,
-      timeout: 30000,
-      windowsHide: true,
-      resourceLimits: { maxOldGenerationSizeMb: 512, maxYoungGenerationSizeMb: 16 },
-      env: { ...process.env, ...env },
-    }, (err, stdout) => {
-      if (err) return reject(err);
-      try {
-        resolve(JSON.parse(stdout));
-      } catch (e) {
-        reject(e);
-      }
-    });
-  });
+  return runCcusageCommand(args, env, { command: CCUSAGE_BIN });
 }
 
 function sumCost(rows, costKey = 'totalCost') {
@@ -1382,14 +1367,25 @@ function codexDailyFromSessions(sessions) {
 }
 
 async function getClaudeAccountUsage(account, force) {
-  const [claudeDailyRaw, rateLimits] = await Promise.all([
-    runCcusage(['claude', 'daily', '--json', '-O'], { CLAUDE_CONFIG_DIR: account.configDir }).catch(() => ({ daily: [] })),
+  let claudeDailyRaw = { daily: [] };
+  let usageError = null;
+  const [dailyResult, rateLimits] = await Promise.all([
+    runCcusage(['claude', 'daily', '--json', '-O'], { CLAUDE_CONFIG_DIR: account.configDir })
+      .then((value) => ({ value }))
+      .catch((error) => ({ error })),
     getClaudeRateLimits(account, force),
   ]);
+  if (dailyResult.error) {
+    usageError = dailyResult.error.message;
+    console.warn(`cc-usage-dashboard: Claude token scan failed: ${usageError}`);
+  } else {
+    claudeDailyRaw = dailyResult.value;
+  }
   const rawRows = claudeDailyRaw.daily || [];
   const section = summarize(claudeDailyRecomputed(rawRows), 'totalCost');
   section.rateLimits = rateLimits;
   section.models = claudeModelTable(rawRows);
+  if (usageError) section.usageError = usageError;
   return section;
 }
 
@@ -1531,11 +1527,14 @@ function mergeCodexModels(nativeModels, piModels) {
 }
 
 async function getCodexAccountUsage(account, force) {
-  const [sessionsRaw, harnessUsage, rateLimits] = await Promise.all([
-    runCcusage(['codex', 'session', '--json', '-O'], { CODEX_HOME: account.configDir }).catch(() => ({ sessions: [] })),
+  const [sessionsResult, harnessUsage, rateLimits] = await Promise.all([
+    runCcusage(['codex', 'session', '--json', '-O'], { CODEX_HOME: account.configDir })
+      .then((value) => ({ value }))
+      .catch((error) => ({ error })),
     scanCodexHarnessSessions(),
     getCodexRateLimits(account, force),
   ]);
+  const sessionsRaw = sessionsResult.value || { sessions: [] };
   const sessions = sessionsRaw.sessions || sessionsRaw.session || [];
   const nativeDaily = codexDailyFromSessions(sessions);
   const nativeModels = modelTableFromCodexSessions(sessions);
@@ -1549,6 +1548,10 @@ async function getCodexAccountUsage(account, force) {
   section.usageSources = ['Codex CLI'];
   for (const [source, count] of Object.entries(harnessUsage.sourceCounts)) {
     if (count) section.usageSources.push(`${source} (${count} Codex responses)`);
+  }
+  if (sessionsResult.error) {
+    section.usageError = sessionsResult.error.message;
+    console.warn(`cc-usage-dashboard: Codex token scan failed: ${section.usageError}`);
   }
   return section;
 }
@@ -2186,6 +2189,7 @@ const CACHE_MS = 30_000;
 // the in-memory cache deals with rapid polls, the disk cache survives restarts
 // and stops the poll loop from rescanning everything more than every 5 minutes.
 const DISK_CACHE_MS = 5 * 60_000;
+const DISK_CACHE_VERSION = 2;
 const DISK_CACHE_PATH = path.join(__dirname, 'usage-cache.json');
 
 async function loadDiskCache() {
@@ -2193,7 +2197,8 @@ async function loadDiskCache() {
   try {
     const raw = await readFile(DISK_CACHE_PATH, 'utf8');
     const data = JSON.parse(raw);
-    if (!data || !Array.isArray(data.accounts)) return null;
+    if (!data || data.cacheVersion !== DISK_CACHE_VERSION || !Array.isArray(data.accounts)) return null;
+    data.accounts = data.accounts.filter((account) => !isProviderDisabled(account.provider));
     if (Date.now() - Date.parse(data.fetchedAt) > DISK_CACHE_MS) return null;
     return data;
   } catch {
@@ -2237,7 +2242,7 @@ async function getUsage() {
     results.push(await getAccountUsage(account, false));
   }
 
-  cache = { accounts: results, fetchedAt: new Date().toISOString() };
+  cache = { cacheVersion: DISK_CACHE_VERSION, accounts: results, fetchedAt: new Date().toISOString() };
   cacheAt = now;
   saveDiskCache(cache);
   noteHistory(cache);
