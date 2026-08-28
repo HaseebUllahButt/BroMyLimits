@@ -109,15 +109,33 @@ const ANTIGRAVITY_CLIENT_SECRET = process.env.ANTIGRAVITY_CLIENT_SECRET || Buffe
   'base64',
  ).toString('utf8');
 
+const ANTIGRAVITY_CLI_TOKEN_PATH = process.env.ANTIGRAVITY_CLI_TOKEN_PATH
+  || path.join(ANTIGRAVITY_DATA_DIR, 'antigravity-oauth-token');
+
 async function readAntigravityAuth() {
+  // Primary: Pi agent auth store (has { antigravity: { access, refresh, expires } })
   try {
     const auth = JSON.parse(await readFile(ANTIGRAVITY_AUTH_PATH, 'utf8'));
     const credentials = auth.antigravity;
-    if (!credentials || (!credentials.access && !credentials.refresh)) return null;
-    return { ...credentials, authPath: ANTIGRAVITY_AUTH_PATH };
-  } catch {
-    return null;
-  }
+    if (credentials && (credentials.access || credentials.refresh)) {
+      return { ...credentials, authPath: ANTIGRAVITY_AUTH_PATH };
+    }
+  } catch { /* fall through */ }
+
+  // Fallback: AGY CLI token file ({ token: { access_token, refresh_token, expiry }, auth_method })
+  try {
+    const raw = JSON.parse(await readFile(ANTIGRAVITY_CLI_TOKEN_PATH, 'utf8'));
+    const tok = raw.token || {};
+    if (!tok.access_token && !tok.refresh_token) return null;
+    return {
+      access: tok.access_token || null,
+      refresh: tok.refresh_token || null,
+      expires: tok.expiry ? Date.parse(tok.expiry) : 0,
+      authPath: ANTIGRAVITY_CLI_TOKEN_PATH,
+    };
+  } catch { /* fall through */ }
+
+  return null;
 }
 
 function antigravityHeaders(token) {
@@ -158,7 +176,8 @@ async function refreshAntigravityToken(credentials) {
 async function getAntigravityAccessToken() {
   const credentials = await readAntigravityAuth();
   if (!credentials) throw new Error('no Antigravity credentials');
-  const cached = antigravityTokens.get(ANTIGRAVITY_AUTH_PATH);
+  const tokenKey = credentials.authPath || ANTIGRAVITY_AUTH_PATH;
+  const cached = antigravityTokens.get(tokenKey);
   const expires = Number(credentials.expires || 0);
   if (credentials.access && expires > Date.now() + ANTIGRAVITY_TOKEN_EARLY_REFRESH_MS) {
     return credentials.access;
@@ -167,7 +186,7 @@ async function getAntigravityAccessToken() {
     return cached.access;
   }
   const refreshed = await refreshAntigravityToken(credentials);
-  antigravityTokens.set(ANTIGRAVITY_AUTH_PATH, refreshed);
+  antigravityTokens.set(tokenKey, refreshed);
   return refreshed.access;
 }
 

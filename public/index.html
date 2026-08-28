@@ -1029,6 +1029,85 @@
     .eco-card .stat-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .eco-meter { max-width: none; }
   }
+
+  /* --- Limit Economics panel header ---------------------------------------- */
+  .eco-panel-head {
+    flex: none;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    margin-bottom: 0.85rem;
+    flex-wrap: wrap;
+  }
+  .eco-head-right {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    flex-wrap: wrap;
+  }
+  .eco-top-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.38rem;
+    padding: 0.22rem 0.65rem;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--surface);
+    font-size: 0.71rem;
+    font-weight: 500;
+    color: var(--ink-soft);
+    box-shadow: var(--shadow-xs);
+    white-space: nowrap;
+  }
+  .eco-top-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    flex: none;
+  }
+  .eco-provider-filters {
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+    flex-wrap: wrap;
+  }
+  .eco-filter {
+    position: relative;
+    flex: none;
+  }
+  .eco-filter input { position: absolute; opacity: 0; pointer-events: none; }
+  .eco-filter span {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.26rem 0.6rem;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--surface);
+    color: var(--ink-dim);
+    font-size: 0.7rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: 0.15s var(--ease);
+  }
+  .eco-filter input:checked + span { color: var(--ink); border-color: var(--border-strong); box-shadow: var(--shadow-xs); }
+  .eco-filter input:not(:checked) + span { opacity: 0.45; text-decoration: line-through; }
+  .eco-filter input:focus-visible + span { outline: 2px solid var(--accent-2); outline-offset: 2px; }
+
+  /* --- Total Reports: right column with cost stats + token report card ------- */
+  .report-right-col {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+    min-height: 0;
+  }
+  .report-tok-card {
+    flex: 1;
+    min-height: 0;
+  }
+  .report-stats-tok { margin-top: 0.1rem; }
+  .tok-value { color: var(--accent-2) !important; }
 </style>
 </head>
 <body>
@@ -1178,14 +1257,21 @@ function topModels(accounts) {
   return [...models.values()].sort((a, b) => b.tokens - a.tokens).slice(0, 8);
 }
 
-function donutChartHtml(rows, grandCost) {
-  const total = grandCost || 0;
-  const segments = rows.filter(row => row.cost > 0).sort((a, b) => b.cost - a.cost);
+const reportMetricOf = () => localStorage.getItem('ccu-report-metric') === 'tokens' ? 'tokens' : 'cost';
+const reportSetMetric = (m) => localStorage.setItem('ccu-report-metric', m);
+
+function donutChartHtml(rows, grandCost, grandTokens, metric = 'cost') {
+  const isTok = metric === 'tokens';
+  const total = isTok ? (grandTokens || 0) : (grandCost || 0);
+  const segments = rows
+    .filter(row => (isTok ? row.tokens : row.cost) > 0)
+    .sort((a, b) => isTok ? b.tokens - a.tokens : b.cost - a.cost);
   const R = 54;
   const C = 2 * Math.PI * R;
   let acc = 0;
   const arcs = segments.map((row, i) => {
-    const frac = total ? row.cost / total : 0;
+    const val = isTok ? row.tokens : row.cost;
+    const frac = total ? val / total : 0;
     const dash = Math.max(frac * C - (segments.length > 1 ? 1.5 : 0), 0);
     const off = -acc * C;
     acc += frac;
@@ -1193,24 +1279,26 @@ function donutChartHtml(rows, grandCost) {
     return `<circle class="donut-seg" data-seg-index="${i}" data-name="${esc(accountTitle(row.account))}" data-cost="${esc(fmt$(row.cost))}" data-pct="${(frac * 100).toFixed(1)}" data-tokens="${esc(fmtTok(row.tokens))}" style="animation-delay:${i * 0.06}s" r="${R}" cx="64" cy="64" fill="none" stroke="${color}" stroke-width="17" stroke-linecap="butt" stroke-dasharray="${dash} ${C - dash}" stroke-dashoffset="${off}" transform="rotate(-90 64 64)"></circle>`;
   }).join('');
   const legend = segments.map((row, i) => {
-    const frac = total ? row.cost / total : 0;
+    const val = isTok ? row.tokens : row.cost;
+    const frac = total ? val / total : 0;
     const share = frac * 100;
     const color = reportColors[row.index % reportColors.length];
+    const valDisplay = isTok ? fmtTok(row.tokens) : fmt$(row.cost);
     return `
     <div class="bar-row donut-legend-row" data-legend-index="${i}" data-name="${esc(accountTitle(row.account))}" data-cost="${esc(fmt$(row.cost))}" data-pct="${share.toFixed(1)}" data-tokens="${esc(fmtTok(row.tokens))}" style="animation-delay:${0.1 + i * 0.05}s">
       <div class="bar-row-head">
         <span class="bar-row-name"><span class="legend-swatch" style="background:${color}"></span>${accountTitle(row.account)}</span>
-        <span class="bar-row-val">${fmt$(row.cost)} <span>· ${share.toFixed(1)}%</span></span>
+        <span class="bar-row-val">${valDisplay} <span>· ${share.toFixed(1)}%</span></span>
       </div>
       <div class="bar-chart-track"><div class="bar-chart-fill" style="width:${share}%;background:${color}"></div></div>
     </div>`;
   }).join('');
   if (!segments.length) return '<div class="bar-chart-empty"><span class="empty">No usage yet</span></div>';
-  const centerDefault = `<span class="donut-total">${fmt$(total)}</span><span class="donut-label">all time</span>`;
+  const centerDefault = `<span class="donut-total">${isTok ? fmtTok(total) : fmt$(total)}</span><span class="donut-label">${isTok ? 'total tokens' : 'all time'}</span>`;
   return `
-    <div class="donut-wrap">
+    <div class="donut-wrap" data-donut-metric="${metric}">
       <div class="donut-box">
-        <svg viewBox="0 0 128 128" role="img" aria-label="Cost by account">
+        <svg viewBox="0 0 128 128" role="img" aria-label="${isTok ? 'Tokens' : 'Cost'} by account">
           <circle cx="64" cy="64" r="${R}" fill="none" stroke="var(--surface-3)" stroke-width="17"></circle>
           ${arcs}
         </svg>
@@ -1229,18 +1317,49 @@ function totalReportHtml(accounts) {
     month: sumPeriod(includedAccounts, 'month'),
     allTime: sumPeriod(includedAccounts, 'allTime'),
   };
-  const rows = includedAccounts.map(account => ({ account, index: accounts.findIndex(a => a.id === account.id), ...accountTotals(account) }));
-  const grandCost = periods.allTime.cost;
-  const donut = donutChartHtml(rows, grandCost);
-  const stats = [
-    ['Today', periods.today], ['Last 7 days', periods.last7d],
-    ['This month', periods.month], ['All time', periods.allTime],
-  ].map(([label, value]) => `<div class="stat"><div class="label">${label}</div><div class="value">${fmt$(value.cost)}</div><div class="sub">${fmtTok(value.tokens)} tokens</div></div>`).join('');
 
-  const filters = accounts.map((account, index) => `<label class="report-filter" style="--filter-color:${reportColors[index % reportColors.length]}">
-    <input type="checkbox" data-report-account="${account.id}" ${excluded.has(account.id) ? '' : 'checked'}>
-    <span>${accountTitle(account)}</span>
-  </label>`).join('');
+  const rows = includedAccounts.map(account => ({
+    account,
+    index: accounts.findIndex(a => a.id === account.id),
+    ...accountTotals(account)
+  }));
+
+  const metric = reportMetricOf();
+  const grandCost = periods.allTime.cost;
+  const grandTokens = periods.allTime.tokens;
+  const donut = donutChartHtml(rows, grandCost, grandTokens, metric);
+
+  // Cost stats row
+  const costStats = [
+    ['Today', periods.today],
+    ['Last 7 days', periods.last7d],
+    ['This month', periods.month],
+    ['All time', periods.allTime],
+  ].map(([label, value]) => `
+    <div class="stat">
+      <div class="label">${label}</div>
+      <div class="value">${fmt$(value.cost)}</div>
+      <div class="sub">${fmtTok(value.tokens)} tokens</div>
+    </div>`).join('');
+
+  // Token stats row — mirrors the cost row but leads with tokens
+  const tokenStats = [
+    ['Today', periods.today],
+    ['Last 7 days', periods.last7d],
+    ['This month', periods.month],
+    ['All time', periods.allTime],
+  ].map(([label, value]) => `
+    <div class="stat">
+      <div class="label">${label}</div>
+      <div class="value tok-value">${fmtTok(value.tokens)}</div>
+      <div class="sub">${fmt$(value.cost)}</div>
+    </div>`).join('');
+
+  const filters = accounts.map((account, index) => `
+    <label class="report-filter" style="--filter-color:${reportColors[index % reportColors.length]}">
+      <input type="checkbox" data-report-account="${account.id}" ${excluded.has(account.id) ? '' : 'checked'}>
+      <span>${accountTitle(account)}</span>
+    </label>`).join('');
 
   const models = topModels(includedAccounts);
   const modelRows = models.map((model, index) => `<tr>
@@ -1263,10 +1382,22 @@ function totalReportHtml(accounts) {
       <div class="report-filters"><span class="report-filter-label">Include</span>${filters}</div>
       <div class="report-hero">
         <div class="card bars-card">
-          <h2 class="card-title">Cost by account · all time</h2>
+          <div class="limits-head" style="margin-bottom:0.5rem">
+            <h2 class="card-title" style="margin:0">${metric === 'tokens' ? 'Tokens' : 'Cost'} by account · all time</h2>
+            <div class="eco-toolbar">
+              <button class="eco-toggle${metric === 'cost' ? ' active' : ''}" data-report-metric="cost">Dollars</button>
+              <button class="eco-toggle${metric === 'tokens' ? ' active' : ''}" data-report-metric="tokens">Tokens</button>
+            </div>
+          </div>
           ${donut}
         </div>
-        <div class="report-stats">${stats}</div>
+        <div class="report-right-col">
+          <div class="report-stats">${costStats}</div>
+          <div class="report-tok-card card">
+            <h2 class="card-title">Token report</h2>
+            <div class="report-stats report-stats-tok">${tokenStats}</div>
+          </div>
+        </div>
       </div>
       <div class="report-lower">
         <div class="card report-table-card">
@@ -1293,11 +1424,31 @@ document.addEventListener('change', (e) => {
     setReportAccount(reportAccount.dataset.reportAccount, reportAccount.checked);
     return;
   }
+  const ecoHideProvider = e.target.closest('[data-eco-hide-provider]');
+  if (ecoHideProvider) {
+    toggleEcoHidden(ecoHideProvider.dataset.ecoHideProvider, ecoHideProvider.checked);
+    return;
+  }
   const t = e.target.closest('[data-toggle-account]');
   if (t) toggleHidden(t.dataset.toggleAccount, t.checked);
 });
 
+document.addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-report-metric]');
+  if (!btn) return;
+  reportSetMetric(btn.dataset.reportMetric);
+  const totalPanel = document.getElementById('panel-total');
+  if (totalPanel) totalPanel.innerHTML = totalReportHtml(lastAllAccounts);
+});
+
 function donutDetailHtml(el) {
+  const wrap = el.closest('[data-donut-metric]');
+  const isTok = (wrap?.dataset?.donutMetric || reportMetricOf()) === 'tokens';
+  if (isTok) {
+    return `<span class="donut-detail-name" title="${el.dataset.name}">${el.dataset.name}</span>
+      <span class="donut-total">${el.dataset.tokens}</span>
+      <span class="donut-detail-meta">${el.dataset.pct}% · ${el.dataset.cost}</span>`;
+  }
   return `<span class="donut-detail-name" title="${el.dataset.name}">${el.dataset.name}</span>
     <span class="donut-total">${el.dataset.cost}</span>
     <span class="donut-detail-meta">${el.dataset.pct}% · ${el.dataset.tokens} tokens</span>`;
@@ -1644,9 +1795,20 @@ document.getElementById('tabs').addEventListener('click', (e) => {
 
 let limitHistoryData = null;
 
-// Kept to the two accounts actually being watched. Everything else still lands
-// in the ledger untouched; this only decides what the panel draws.
+// All accounts with weekly limit windows. Everything else still lands in the
+// ledger untouched; this only decides what the panel draws.
 const ECO_ACCOUNTS = ['claude-personal', 'codex-default'];
+
+const ECO_HIDDEN_KEY = 'ccu-eco-hidden-providers';
+function getEcoHidden() {
+  try { return new Set(JSON.parse(localStorage.getItem(ECO_HIDDEN_KEY) || '[]')); } catch { return new Set(); }
+}
+function toggleEcoHidden(provider, visible) {
+  const hidden = getEcoHidden();
+  if (visible) hidden.delete(provider); else hidden.add(provider);
+  localStorage.setItem(ECO_HIDDEN_KEY, JSON.stringify([...hidden]));
+  renderLimitEconomics();
+}
 
 // Percentages arrive as whole numbers, so a rate measured across only a point
 // or two carries up to ±50% quantisation error. Below this many measured
@@ -1852,15 +2014,44 @@ function ecoCard(account, win, metric, allowEstimate) {
   </div>`;
 }
 
+// Compute the provider with the most tokens across a set of accounts.
+function topProviderByTokens(accounts) {
+  const byProvider = new Map();
+  for (const a of accounts) {
+    const name = providerName(a.provider);
+    const tokens = Number(a.allTime?.tokens) || 0;
+    byProvider.set(name, (byProvider.get(name) || 0) + tokens);
+  }
+  if (!byProvider.size) return null;
+  let topName = null, topTok = 0;
+  for (const [name, tok] of byProvider) {
+    if (tok > topTok) { topTok = tok; topName = name; }
+  }
+  return topName ? { name: topName, tokens: topTok } : null;
+}
+
 function limitEconomicsHtml(history) {
   if (!history) return '<p class="empty">Loading limit history…</p>';
   if (history.error) return `<p class="empty">${esc(history.error)}</p>`;
   const metric = ecoMetricOf();
+  const ecoHidden = getEcoHidden();
   const byId = new Map((lastAllAccounts || []).map(a => [a.id, a]));
+
+  // Build available providers from ECO_ACCOUNTS present in history
+  const availableProviders = [];
+  const seenProviders = new Set();
+  for (const entry of (history.accounts || []).filter(e => ECO_ACCOUNTS.includes(e.id))) {
+    const account = byId.get(entry.id) || { id: entry.id, provider: entry.provider, label: entry.id };
+    if (!seenProviders.has(account.provider)) {
+      seenProviders.add(account.provider);
+      availableProviders.push(account);
+    }
+  }
 
   const cards = [];
   for (const entry of (history.accounts || []).filter(e => ECO_ACCOUNTS.includes(e.id))) {
     const account = byId.get(entry.id) || { id: entry.id, provider: entry.provider, label: entry.id };
+    if (ecoHidden.has(account.provider)) continue;
     // The seven-day estimate needs one window to govern the account's whole
     // usage; an account split across several weekly quotas has no single
     // percentage that explains its totals.
@@ -1872,11 +2063,31 @@ function limitEconomicsHtml(history) {
   }
   cards.sort((a, b) => ECO_ACCOUNTS.indexOf(a.acct) - ECO_ACCOUNTS.indexOf(b.acct));
 
+  // Top provider by tokens across all ECO_ACCOUNTS (even hidden ones)
+  const ecoAccounts = ECO_ACCOUNTS.map(id => byId.get(id)).filter(Boolean);
+  const top = topProviderByTokens(ecoAccounts);
+  const topBadge = top
+    ? `<span class="eco-top-badge"><span class="eco-top-dot dot ${dotClass(ecoAccounts.find(a=>providerName(a.provider)===top.name)?.provider||'')}"></span>${esc(top.name)} · ${fmtTok(top.tokens)} tokens</span>`
+    : '';
+
+  // Provider filter toggles
+  const providerToggles = availableProviders.map(a => `
+    <label class="eco-filter" style="--filter-color:var(${accentVar(a.provider)})">
+      <input type="checkbox" data-eco-hide-provider="${a.provider}" ${ecoHidden.has(a.provider) ? '' : 'checked'}>
+      <span><span class="eco-top-dot dot ${dotClass(a.provider)}"></span>${providerName(a.provider)}</span>
+    </label>`).join('');
+
   // The shell is a fixed-height layout with every panel set to overflow:hidden,
   // so this panel carries its own scroll region under a pinned heading.
-  return `<div class="panel-heading">Limit economics</div>
+  return `<div class="eco-panel-head">
+      <div class="panel-heading" style="margin:0">Limit economics</div>
+      <div class="eco-head-right">
+        ${topBadge}
+        <div class="eco-provider-filters">${providerToggles}</div>
+      </div>
+    </div>
     <div class="eco-scroll">
-      ${cards.length ? cards.map(c => c.html).join('') : '<p class="empty">No limit readings recorded yet.</p>'}
+      ${cards.length ? cards.map(c => c.html).join('') : '<p class="empty">No limit readings recorded yet — or all providers hidden.</p>'}
     </div>`;
 }
 
@@ -2013,7 +2224,21 @@ function render(data) {
   updateCountdowns();
 }
 
-load();
+window.onerror = (msg, src, line, col, err) => {
+  const panels = document.getElementById('panels');
+  if (panels && !panels.querySelector('.js-error')) {
+    const div = document.createElement('div');
+    div.className = 'js-error';
+    div.style.cssText = 'padding:1rem;background:#bf493f22;border:1px solid #bf493f;border-radius:8px;font-family:monospace;font-size:0.78rem;color:#bf493f;margin:1rem';
+    div.textContent = `JS Error: ${msg} (line ${line})`;
+    panels.prepend(div);
+  }
+  return false;
+};
+load().catch(e => {
+  const panels = document.getElementById('panels');
+  if (panels) panels.innerHTML = `<p class="empty" style="color:var(--bad)">Failed to load usage data: ${esc(e.message)}</p>`;
+});
 loadLimitHistory();
 setInterval(load, 30000);
 // The ledger only gains a row when a percentage ticks or on its 30-minute
