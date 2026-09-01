@@ -19,15 +19,19 @@ try {
 
 const PORT = process.env.PORT || 47291;
 const HOST = '127.0.0.1';
-const HOME = getHomeDir();
-const DATA_HOME = process.env.XDG_DATA_HOME || (process.platform === 'win32'
-  ? path.join(HOME, 'AppData', 'Local')
-  : process.platform === 'darwin'
-    ? path.join(HOME, 'Library', 'Application Support')
-    : path.join(HOME, '.local', 'share'));
-const OPENCODE_DB = process.env.OPENCODE_DB || path.join(DATA_HOME, 'opencode', 'opencode.db');
-const ANTIGRAVITY_DATA_DIR = process.env.ANTIGRAVITY_DATA_DIR
-  || path.join(HOME, '.gemini', 'antigravity-cli');
+function getDataHome() {
+  const home = getHomeDir();
+  return process.env.XDG_DATA_HOME || (process.platform === 'win32'
+    ? path.join(home, 'AppData', 'Local')
+    : process.platform === 'darwin'
+      ? path.join(home, 'Library', 'Application Support')
+      : path.join(home, '.local', 'share'));
+}
+
+function getAntigravityDataDir() {
+  return process.env.ANTIGRAVITY_DATA_DIR || path.join(getHomeDir(), '.gemini', 'antigravity-cli');
+}
+
 const CCUSAGE_BIN = resolveCcusageCommand();
 
 // --- Account discovery -----------------------------------------------------
@@ -51,19 +55,19 @@ async function detectAccounts() {
   }
 
   if (!isProviderDisabled('opencode')) {
+    const dataHome = getDataHome();
     const seenPaths = new Set();
-    if (process.env.OPENCODE_DB) {
-      try {
-        await stat(process.env.OPENCODE_DB);
-        accounts.push({ id: 'opencode-default', provider: 'opencode', label: 'default', dbPath: process.env.OPENCODE_DB });
-        seenPaths.add(path.resolve(process.env.OPENCODE_DB));
-      } catch {}
-    }
+    const envDb = process.env.OPENCODE_DB || path.join(dataHome, 'opencode', 'opencode.db');
     try {
-      const dataEntries = await readdir(DATA_HOME, { withFileTypes: true });
+      await stat(envDb);
+      accounts.push({ id: 'opencode-default', provider: 'opencode', label: 'default', dbPath: envDb });
+      seenPaths.add(path.resolve(envDb));
+    } catch {}
+    try {
+      const dataEntries = await readdir(dataHome, { withFileTypes: true });
       for (const entry of dataEntries) {
         if (!entry.isDirectory() || !/^opencode/i.test(entry.name)) continue;
-        const dbPath = path.join(DATA_HOME, entry.name, 'opencode.db');
+        const dbPath = path.join(dataHome, entry.name, 'opencode.db');
         const resolved = path.resolve(dbPath);
         if (seenPaths.has(resolved)) continue;
         try {
@@ -113,7 +117,10 @@ async function selectActiveClaudeAccount(accounts) {
 // Pi's antigravity provider stores the Google OAuth credentials in the Pi
 // auth store. The quota summary endpoint reports separate shared pools for
 // Gemini and third-party models, each with a 5-hour and weekly window.
-const ANTIGRAVITY_AUTH_PATH = process.env.PI_AUTH_PATH || path.join(HOME, '.pi', 'agent', 'auth.json');
+function getAntigravityAuthPath() {
+  return process.env.PI_AUTH_PATH || path.join(getHomeDir(), '.pi', 'agent', 'auth.json');
+}
+const ANTIGRAVITY_AUTH_PATH = getAntigravityAuthPath();
 const ANTIGRAVITY_ENDPOINTS = [
   process.env.ANTIGRAVITY_BASE_URL || 'https://cloudcode-pa.googleapis.com',
   'https://daily-cloudcode-pa.sandbox.googleapis.com',
@@ -137,29 +144,33 @@ const ANTIGRAVITY_CLIENT_SECRET = process.env.ANTIGRAVITY_CLIENT_SECRET || Buffe
   'base64',
  ).toString('utf8');
 
-const ANTIGRAVITY_CLI_TOKEN_PATH = process.env.ANTIGRAVITY_CLI_TOKEN_PATH
-  || path.join(ANTIGRAVITY_DATA_DIR, 'antigravity-oauth-token');
+function getAntigravityCliTokenPath() {
+  return process.env.ANTIGRAVITY_CLI_TOKEN_PATH
+    || path.join(getAntigravityDataDir(), 'antigravity-oauth-token');
+}
 
 async function readAntigravityAuth() {
+  const cliTokenPath = getAntigravityCliTokenPath();
+  const antigravityAuthPath = process.env.PI_AUTH_PATH || path.join(getHomeDir(), '.pi', 'agent', 'auth.json');
   // Primary: Pi agent auth store (has { antigravity: { access, refresh, expires } })
   try {
-    const auth = JSON.parse(await readFile(ANTIGRAVITY_AUTH_PATH, 'utf8'));
+    const auth = JSON.parse(await readFile(antigravityAuthPath, 'utf8'));
     const credentials = auth.antigravity;
     if (credentials && (credentials.access || credentials.refresh)) {
-      return { ...credentials, authPath: ANTIGRAVITY_AUTH_PATH };
+      return { ...credentials, authPath: antigravityAuthPath };
     }
   } catch { /* fall through */ }
 
   // Fallback: AGY CLI token file ({ token: { access_token, refresh_token, expiry }, auth_method })
   try {
-    const raw = JSON.parse(await readFile(ANTIGRAVITY_CLI_TOKEN_PATH, 'utf8'));
+    const raw = JSON.parse(await readFile(cliTokenPath, 'utf8'));
     const tok = raw.token || {};
     if (!tok.access_token && !tok.refresh_token) return null;
     return {
       access: tok.access_token || null,
       refresh: tok.refresh_token || null,
       expires: tok.expiry ? Date.parse(tok.expiry) : 0,
-      authPath: ANTIGRAVITY_CLI_TOKEN_PATH,
+      authPath: cliTokenPath,
     };
   } catch { /* fall through */ }
 
@@ -1417,8 +1428,12 @@ async function getClaudeAccountUsage(account, force) {
   return section;
 }
 
-const PI_SESSIONS_DIR = path.join(HOME, '.pi', 'agent', 'sessions');
-const PRIME_SESSIONS_DIR = path.join(HOME, '.prime', 'agent', 'sessions');
+function getPiSessionsDir() {
+  return path.join(getHomeDir(), '.pi', 'agent', 'sessions');
+}
+function getPrimeSessionsDir() {
+  return path.join(getHomeDir(), '.prime', 'agent', 'sessions');
+}
 
 async function jsonlFilesUnder(rootDir) {
   const files = [];
@@ -1441,8 +1456,8 @@ async function scanCodexHarnessSessions() {
   const sourceCounts = {};
 
   for (const [source, sessionsDir] of [
-    ['Pi', PI_SESSIONS_DIR],
-    ['Prime Agent', PRIME_SESSIONS_DIR],
+    ['Pi', getPiSessionsDir()],
+    ['Prime Agent', getPrimeSessionsDir()],
   ]) {
     const files = await jsonlFilesUnder(sessionsDir);
     for (const filePath of files) {
@@ -1846,7 +1861,7 @@ function decodeAntigravityStep(payload) {
 
 async function scanNativeAntigravitySessions() {
   if (!DatabaseSync) return { daily: [], models: [] };
-  const conversationsDir = path.join(ANTIGRAVITY_DATA_DIR, 'conversations');
+  const conversationsDir = path.join(getAntigravityDataDir(), 'conversations');
   const byDate = new Map();
   const byModel = new Map();
   let files;
@@ -1938,11 +1953,12 @@ function mergeAntigravityUsage(...scans) {
 async function scanPiAntigravitySessions() {
   const byDate = new Map();
   const byModel = new Map();
+  const piSessionsDir = getPiSessionsDir();
   try {
-    const projDirs = await readdir(PI_SESSIONS_DIR, { withFileTypes: true });
+    const projDirs = await readdir(piSessionsDir, { withFileTypes: true });
     for (const pDir of projDirs) {
       if (!pDir.isDirectory()) continue;
-      const dirPath = path.join(PI_SESSIONS_DIR, pDir.name);
+      const dirPath = path.join(piSessionsDir, pDir.name);
       let files;
       try { files = await readdir(dirPath); } catch { continue; }
       for (const file of files) {
@@ -2441,13 +2457,46 @@ async function replayCodexHistory(reason) {
   }
 }
 
+// OpenCode appends all real-time UI/streaming events into the `event` table
+// without an automatic retention policy, which causes `opencode.db` to grow
+// into multiple gigabytes over time. The dashboard only needs `session` and
+// `message` records for usage metrics. Pruning stale events and checkpointing
+// the WAL keeps the database compact and healthy without losing usage data.
+async function maintainOpencodeDatabases() {
+  if (!DatabaseSync) return;
+  try {
+    const accounts = await detectAccounts();
+    const opencodeAccounts = accounts.filter((a) => a.provider === 'opencode' && a.dbPath);
+    for (const acct of opencodeAccounts) {
+      let db;
+      try {
+        const s = await stat(acct.dbPath).catch(() => null);
+        if (!s) continue;
+        db = new DatabaseSync(acct.dbPath);
+        db.exec(`
+          DELETE FROM event;
+          PRAGMA wal_checkpoint(TRUNCATE);
+        `);
+      } catch {
+        // If DB is busy with an active OpenCode write, skip until the next maintenance cycle
+      } finally {
+        try { db?.close(); } catch {}
+      }
+    }
+  } catch {}
+}
+
 if (require.main === module) {
   server.listen(PORT, HOST, async () => {
     console.log(`cc-usage-dashboard listening on http://${HOST}:${PORT}`);
     const state = await limitHistory.backfillState();
     const stale = !state || Date.now() - Date.parse(state.ranAt) > BACKFILL_REFRESH_MS;
     if (stale) replayCodexHistory('startup');
-    const timer = setInterval(() => replayCodexHistory('scheduled'), BACKFILL_REFRESH_MS);
+    maintainOpencodeDatabases();
+    const timer = setInterval(() => {
+      replayCodexHistory('scheduled');
+      maintainOpencodeDatabases();
+    }, BACKFILL_REFRESH_MS);
     timer.unref();
     startHistorySampler();
   });
@@ -2456,5 +2505,6 @@ if (require.main === module) {
 module.exports = {
   detectAccounts,
   getUsage,
+  maintainOpencodeDatabases,
   server,
 };

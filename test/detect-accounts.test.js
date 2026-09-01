@@ -87,3 +87,55 @@ test('detectAccounts respects CC_USAGE_DISABLED_PROVIDERS for opencode and antig
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test('maintainOpencodeDatabases prunes event table and checkpoints WAL', async () => {
+  let DatabaseSync;
+  try {
+    ({ DatabaseSync } = require('node:sqlite'));
+  } catch {
+    return;
+  }
+  if (!DatabaseSync) return;
+
+  const { maintainOpencodeDatabases } = require('../server');
+  const root = await mkdtemp(path.join(os.tmpdir(), 'cc-usage-maint-'));
+  const oldHome = process.env.CC_USAGE_HOME;
+  const oldDataHome = process.env.XDG_DATA_HOME;
+
+  try {
+    const dataHome = path.join(root, 'share');
+    const opencodeDir = path.join(dataHome, 'opencode');
+    await mkdir(opencodeDir, { recursive: true });
+    const dbPath = path.join(opencodeDir, 'opencode.db');
+
+    const db = new DatabaseSync(dbPath);
+    db.exec(`
+      CREATE TABLE session (id TEXT PRIMARY KEY, model TEXT, agent TEXT, cost REAL, tokens_input INTEGER, tokens_output INTEGER, tokens_reasoning INTEGER, tokens_cache_read INTEGER, tokens_cache_write INTEGER, time_created INTEGER);
+      CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT, data TEXT);
+      CREATE TABLE event (id TEXT PRIMARY KEY, aggregate_id TEXT, seq INTEGER, type TEXT, data TEXT);
+      INSERT INTO event VALUES ('e1', 's1', 1, 'test', '{"large":"blob"}');
+      INSERT INTO session VALUES ('s1', 'gpt-5', 'build', 0.5, 100, 50, 0, 0, 0, 1000);
+    `);
+    db.close();
+
+    process.env.CC_USAGE_HOME = root;
+    process.env.XDG_DATA_HOME = dataHome;
+    delete process.env.CC_USAGE_DISABLED_PROVIDERS;
+
+    await maintainOpencodeDatabases();
+
+    const dbCheck = new DatabaseSync(dbPath, { readOnly: true });
+    const eventCount = dbCheck.prepare('SELECT count(*) as count FROM event').get();
+    const sessionCount = dbCheck.prepare('SELECT count(*) as count FROM session').get();
+    dbCheck.close();
+
+    assert.equal(eventCount.count, 0, 'event table should be purged');
+    assert.equal(sessionCount.count, 1, 'session table must be preserved');
+  } finally {
+    if (oldHome == null) delete process.env.CC_USAGE_HOME;
+    else process.env.CC_USAGE_HOME = oldHome;
+    if (oldDataHome == null) delete process.env.XDG_DATA_HOME;
+    else process.env.XDG_DATA_HOME = oldDataHome;
+    await rm(root, { recursive: true, force: true });
+  }
+});
