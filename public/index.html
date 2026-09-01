@@ -1795,10 +1795,6 @@ document.getElementById('tabs').addEventListener('click', (e) => {
 
 let limitHistoryData = null;
 
-// All accounts with weekly limit windows. Everything else still lands in the
-// ledger untouched; this only decides what the panel draws.
-const ECO_ACCOUNTS = ['claude-personal', 'codex-default'];
-
 const ECO_HIDDEN_KEY = 'ccu-eco-hidden-providers';
 function getEcoHidden() {
   try { return new Set(JSON.parse(localStorage.getItem(ECO_HIDDEN_KEY) || '[]')); } catch { return new Set(); }
@@ -1932,7 +1928,10 @@ function ecoChart(win, metric, key) {
 
 function ecoCard(account, win, metric, allowEstimate) {
   const key = `${account.id}--${win.key}`;
+  // `lifetime` is now the recent pool (newest 5 complete windows) where
+  // available; `lifetimeAll` keeps the all-time mean for the cross-check.
   const pooled = win.lifetime;
+  const allPool = win.lifetimeAll || null;
   const current = win.current;
   const measured = ecoRate(pooled, metric);
   const estimate = ecoEstimate(account, win, metric, allowEstimate);
@@ -1947,25 +1946,31 @@ function ecoCard(account, win, metric, allowEstimate) {
   const pct = win.latest?.pct ?? 0;
   const barCls = pct >= 90 ? 'bad' : pct >= 70 ? 'warn' : '';
 
+  const isRecent = !!(allPool && pooled && pooled.cycles !== allPool.cycles);
   const why = {
-    measured: () => `measured across ${pooled.cycles} window${pooled.cycles === 1 ? '' : 's'} and ${Math.round(pts)} percentage points`,
+    measured: () => isRecent
+      ? `measured across ${pooled.cycles} recent window${pooled.cycles === 1 ? '' : 's'} and ${Math.round(pts)} points (all-time ${allPool.cycles} windows would be ${ecoFmt(allPool ? ecoRate(allPool, metric) : null, metric)}/1%)`
+      : `measured across ${pooled.cycles} window${pooled.cycles === 1 ? '' : 's'} and ${Math.round(pts)} percentage points`,
     estimated: () => `last 7 days ÷ ${pct}% consumed — tracking began mid-window, so a measured rate takes over once a full window is seen`,
     provisional: () => `only ${Math.round(pts)} point${Math.round(pts) === 1 ? '' : 's'} measured — whole-number percentages make this imprecise so far`,
     none: () => 'no rate yet — it appears once the percentage moves',
   }[mode]();
 
+  const allMeasured = allPool ? ecoRate(allPool, metric) : null;
   const stats = [
-    { label: 'Full window', value: ecoFmt(rate != null ? rate * 100 : null, metric), sub: 'at this rate' },
+    { label: 'Full window', value: ecoFmt(rate != null ? rate * 100 : null, metric), sub: isRecent ? 'recent windows' : 'at this rate' },
     {
       label: 'This window',
       value: current && current.pctSpan > 0 ? ecoFmt(ecoTotal(current, metric), metric) : '—',
       sub: current && current.pctSpan > 0 ? `over ${current.pctSpan}%` : 'not moved yet',
     },
-    mode === 'estimated' && measured != null
-      ? { label: 'Measured', value: ecoFmt(measured, metric), sub: `${Math.round(pts)} pt${Math.round(pts) === 1 ? '' : 's'} so far` }
-      : mode === 'measured' && estimate != null
-        ? { label: 'Cross-check', value: ecoFmt(estimate, metric), sub: 'from last 7 days' }
-        : { label: 'Windows seen', value: pooled ? String(pooled.cycles) : '0', sub: 'with a measurable rate' },
+    isRecent && allMeasured != null
+      ? { label: 'All-time', value: ecoFmt(allMeasured, metric), sub: `${allPool.cycles} windows` }
+      : mode === 'estimated' && measured != null
+        ? { label: 'Measured', value: ecoFmt(measured, metric), sub: `${Math.round(pts)} pt${Math.round(pts) === 1 ? '' : 's'} so far` }
+        : mode === 'measured' && estimate != null
+          ? { label: 'Cross-check', value: ecoFmt(estimate, metric), sub: 'from last 7 days' }
+          : { label: 'Windows seen', value: pooled ? String(pooled.cycles) : '0', sub: 'with a measurable rate' },
   ];
 
   const rows = win.cycles.filter(c => ecoRate(c, metric) > 0);
@@ -2037,38 +2042,34 @@ function limitEconomicsHtml(history) {
   const ecoHidden = getEcoHidden();
   const byId = new Map((lastAllAccounts || []).map(a => [a.id, a]));
 
-  // Build available providers from ECO_ACCOUNTS present in history
+  // Build available providers from accounts present in history with rate-limit windows
   const availableProviders = [];
   const seenProviders = new Set();
-  for (const entry of (history.accounts || []).filter(e => ECO_ACCOUNTS.includes(e.id))) {
+  const cards = [];
+
+  for (const entry of (history.accounts || [])) {
     const account = byId.get(entry.id) || { id: entry.id, provider: entry.provider, label: entry.id };
+    const weeklyWindows = (entry.windows || []).filter(w => /weekly/i.test(w.key) || /weekly/i.test(w.label) || w.key === 'weekly');
+    const windowsToUse = weeklyWindows.length ? weeklyWindows : (entry.windows || []);
+    if (!windowsToUse.length) continue;
+
     if (!seenProviders.has(account.provider)) {
       seenProviders.add(account.provider);
       availableProviders.push(account);
     }
-  }
 
-  const cards = [];
-  for (const entry of (history.accounts || []).filter(e => ECO_ACCOUNTS.includes(e.id))) {
-    const account = byId.get(entry.id) || { id: entry.id, provider: entry.provider, label: entry.id };
     if (ecoHidden.has(account.provider)) continue;
-    // The seven-day estimate needs one window to govern the account's whole
-    // usage; an account split across several weekly quotas has no single
-    // percentage that explains its totals.
-    // One card per account: the weekly window, which is the limit that bites.
-    // The estimate needs that window to govern the account's whole usage.
-    const weekly = entry.windows.find(w => w.key === 'weekly')
-      || entry.windows.find(w => /weekly/.test(w.key));
-    if (!weekly) continue;
-    cards.push({ acct: entry.id, html: ecoCard(account, weekly, metric, true) });
-  }
-  cards.sort((a, b) => ECO_ACCOUNTS.indexOf(a.acct) - ECO_ACCOUNTS.indexOf(b.acct));
 
-  // Top provider by tokens across all ECO_ACCOUNTS (even hidden ones)
-  const ecoAccounts = ECO_ACCOUNTS.map(id => byId.get(id)).filter(Boolean);
-  const top = topProviderByTokens(ecoAccounts);
+    for (const win of windowsToUse) {
+      cards.push({ acct: entry.id, winKey: win.key, html: ecoCard(account, win, metric, true) });
+    }
+  }
+
+  // Top provider by tokens across all accounts in limit history (even hidden ones)
+  const allEcoAccounts = (history.accounts || []).map(e => byId.get(e.id)).filter(Boolean);
+  const top = topProviderByTokens(allEcoAccounts);
   const topBadge = top
-    ? `<span class="eco-top-badge"><span class="eco-top-dot dot ${dotClass(ecoAccounts.find(a=>providerName(a.provider)===top.name)?.provider||'')}"></span>${esc(top.name)} · ${fmtTok(top.tokens)} tokens</span>`
+    ? `<span class="eco-top-badge"><span class="eco-top-dot dot ${dotClass(allEcoAccounts.find(a=>providerName(a.provider)===top.name)?.provider||'')}"></span>${esc(top.name)} · ${fmtTok(top.tokens)} tokens</span>`
     : '';
 
   // Provider filter toggles

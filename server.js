@@ -36,20 +36,48 @@ async function detectAccounts() {
   const activeClaude = await selectActiveClaudeAccount(discovered);
   const accounts = discovered.filter((account) => account.provider !== 'claude');
   if (activeClaude) accounts.push(activeClaude);
-  const antigravityAuth = await readAntigravityAuth();
-  if (antigravityAuth) {
-    accounts.push({
-      id: 'antigravity-default',
-      provider: 'antigravity',
-      label: 'default',
-      authPath: antigravityAuth.authPath,
-      projectId: antigravityAuth.projectId || null,
-    });
+
+  if (!isProviderDisabled('antigravity')) {
+    const antigravityAuth = await readAntigravityAuth();
+    if (antigravityAuth) {
+      accounts.push({
+        id: 'antigravity-default',
+        provider: 'antigravity',
+        label: 'default',
+        authPath: antigravityAuth.authPath,
+        projectId: antigravityAuth.projectId || null,
+      });
+    }
   }
-  try {
-    await readFile(OPENCODE_DB);
-    accounts.push({ id: 'opencode-default', provider: 'opencode', label: 'default', dbPath: OPENCODE_DB });
-  } catch {}
+
+  if (!isProviderDisabled('opencode')) {
+    const seenPaths = new Set();
+    if (process.env.OPENCODE_DB) {
+      try {
+        await stat(process.env.OPENCODE_DB);
+        accounts.push({ id: 'opencode-default', provider: 'opencode', label: 'default', dbPath: process.env.OPENCODE_DB });
+        seenPaths.add(path.resolve(process.env.OPENCODE_DB));
+      } catch {}
+    }
+    try {
+      const dataEntries = await readdir(DATA_HOME, { withFileTypes: true });
+      for (const entry of dataEntries) {
+        if (!entry.isDirectory() || !/^opencode/i.test(entry.name)) continue;
+        const dbPath = path.join(DATA_HOME, entry.name, 'opencode.db');
+        const resolved = path.resolve(dbPath);
+        if (seenPaths.has(resolved)) continue;
+        try {
+          await stat(resolved);
+          const label = entry.name === 'opencode' ? 'default' : entry.name.replace(/^opencode[-_]?/i, '') || entry.name;
+          const safeLabel = label.replace(/[^a-zA-Z0-9._-]+/g, '-');
+          const id = label === 'default' ? 'opencode-default' : `opencode-${safeLabel}`;
+          accounts.push({ id, provider: 'opencode', label, dbPath: resolved });
+          seenPaths.add(resolved);
+        } catch {}
+      }
+    } catch {}
+  }
+
   return accounts;
 }
 
@@ -2413,12 +2441,20 @@ async function replayCodexHistory(reason) {
   }
 }
 
-server.listen(PORT, HOST, async () => {
-  console.log(`cc-usage-dashboard listening on http://${HOST}:${PORT}`);
-  const state = await limitHistory.backfillState();
-  const stale = !state || Date.now() - Date.parse(state.ranAt) > BACKFILL_REFRESH_MS;
-  if (stale) replayCodexHistory('startup');
-  const timer = setInterval(() => replayCodexHistory('scheduled'), BACKFILL_REFRESH_MS);
-  timer.unref();
-  startHistorySampler();
-});
+if (require.main === module) {
+  server.listen(PORT, HOST, async () => {
+    console.log(`cc-usage-dashboard listening on http://${HOST}:${PORT}`);
+    const state = await limitHistory.backfillState();
+    const stale = !state || Date.now() - Date.parse(state.ranAt) > BACKFILL_REFRESH_MS;
+    if (stale) replayCodexHistory('startup');
+    const timer = setInterval(() => replayCodexHistory('scheduled'), BACKFILL_REFRESH_MS);
+    timer.unref();
+    startHistorySampler();
+  });
+}
+
+module.exports = {
+  detectAccounts,
+  getUsage,
+  server,
+};
