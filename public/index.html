@@ -780,6 +780,28 @@
   }
   .report-stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.6rem; }
   .report-stats .stat { display: flex; flex-direction: column; justify-content: center; }
+  /* Prompt cache: the hit rate is the headline, the money is the point. */
+  .cache-card { display: flex; flex-direction: column; gap: 0.7rem; }
+  .cache-hero { display: flex; align-items: baseline; gap: 0.6rem; flex-wrap: wrap; }
+  .cache-hero .big {
+    font-size: 2rem; font-weight: 650; line-height: 1;
+    color: var(--good); font-variant-numeric: tabular-nums;
+  }
+  .cache-hero .cap { color: var(--ink-dim); font-size: 0.8rem; }
+  .cache-saved { font-weight: 650; color: var(--ink); font-variant-numeric: tabular-nums; }
+  .cache-note { color: var(--ink-dim); font-size: 0.74rem; line-height: 1.5; }
+  .report-lower-col {
+    display: flex; flex-direction: column; gap: 0.75rem;
+    min-height: 0; overflow-y: auto;
+  }
+  .cache-card { flex: none; }
+  .cache-rows { display: flex; flex-direction: column; gap: 0.4rem; }
+  .cache-row { display: grid; grid-template-columns: minmax(0,1fr) 46px 64px; align-items: center; gap: 0.5rem; font-size: 0.76rem; }
+  .cache-row .nm { color: var(--ink-soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cache-row .pc, .cache-row .sv { text-align: right; font-variant-numeric: tabular-nums; color: var(--ink-dim); }
+  .cache-row .sv { color: var(--good); }
+  .cache-meter { height: 5px; border-radius: 999px; background: var(--surface-3); overflow: hidden; }
+  .cache-meter span { display: block; height: 100%; border-radius: 999px; background: var(--good); }
   .report-lower {
     flex: 1;
     min-height: 0;
@@ -1370,6 +1392,48 @@ function donutChartHtml(rows, grandCost, grandTokens, metric = 'cost') {
     </div>`;
 }
 
+// How much of what was sent to the models came back out of their prompt cache,
+// and what that was worth. A cached input token bills at a fraction of a fresh
+// one, so on agent sessions - where the same context is resent every turn -
+// this ratio is most of the difference between the bill and what it could have
+// been. Providers that report only a billed total (OpenCode) or a tick cost
+// (Grok) contribute their tokens and abstain from the money.
+function promptCacheHtml(accounts) {
+  let fresh = 0, read = 0, write = 0, saved = 0, premium = 0, wouldCost = 0;
+  let unpriced = false;
+  const rows = [];
+  for (const a of accounts) {
+    const c = a.cache;
+    if (!c || (!c.cacheRead && !c.freshInput)) continue;
+    fresh += c.freshInput; read += c.cacheRead; write += c.cacheWrite;
+    saved += c.savedUsd; premium += c.writePremiumUsd; wouldCost += c.wouldHaveCostUsd;
+    unpriced = unpriced || c.unpriced;
+    rows.push({ name: accountTitle(a), hit: c.hitRate, saved: c.netSavedUsd, provider: a.provider });
+  }
+  if (!rows.length) return '';
+  rows.sort((x, y) => y.saved - x.saved || y.hit - x.hit);
+  const denom = fresh + read;
+  const hit = denom ? read / denom : 0;
+  const net = saved - premium;
+  const spent = accounts.reduce((sum, a) => sum + (a.allTime?.cost || 0), 0);
+
+  const best = rows[0];
+  return `<div class="card cache-card" title="${fmtTok(read)} cached reads, ${fmtTok(write)} cache writes, ${fmtTok(fresh)} fresh input">
+      <h2 class="card-title">Prompt cache · all time</h2>
+      <div class="cache-hero">
+        <span class="big">${(hit * 100).toFixed(1)}%</span>
+        <span class="cap">of input tokens served from cache</span>
+      </div>
+      <div class="cache-meter"><span style="width:${(hit * 100).toFixed(1)}%"></span></div>
+      <div class="cache-note">
+        Saved <span class="cache-saved">${fmt$(net)}</span>:
+        ${fmt$(spent)} spent, not ${fmt$(spent + net)}.
+        ${best && best.saved ? `Most from ${best.name}.` : ''}
+        ${unpriced ? '<br>Providers reporting only a billed total contribute tokens, not savings.' : ''}
+      </div>
+    </div>`;
+}
+
 function totalReportHtml(accounts) {
   const excluded = getReportExcluded();
   const includedAccounts = accounts.filter(account => !excluded.has(account.id));
@@ -1435,7 +1499,9 @@ function totalReportHtml(accounts) {
       <td class="model-name"><span class="dot ${dotClass(row.account.provider)}" style="display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:.4rem"></span>${accountTitle(row.account)}</td>
       <td>${fmt$(row.cost)}</td><td>${fmtTok(row.tokens)}</td>
       <td>${fmtTok(t.input)}</td><td>${fmtTok(t.output)}</td>
-      <td>${fmtTok(t.cacheWrite + t.cacheRead)}</td><td>${row.models}</td>
+      <td>${fmtTok(t.cacheWrite + t.cacheRead)}</td>
+      <td>${row.account.cache ? (row.account.cache.hitRate * 100).toFixed(0) + '%' : '—'}</td>
+      <td>${row.models}</td>
     </tr>`;
   }).join('');
 
@@ -1465,16 +1531,19 @@ function totalReportHtml(accounts) {
         <div class="card report-table-card">
           <h2 class="card-title">Complete account report</h2>
           <div class="table-scroll"><table>
-            <thead><tr><th>Account</th><th>Cost</th><th>Total tokens</th><th>Input</th><th>Output</th><th>Cache</th><th>Models</th></tr></thead>
-            <tbody>${body || '<tr><td colspan="7" class="empty">No included usage data</td></tr>'}</tbody>
+            <thead><tr><th>Account</th><th>Cost</th><th>Total tokens</th><th>Input</th><th>Output</th><th>Cache</th><th>Cache hit</th><th>Models</th></tr></thead>
+            <tbody>${body || '<tr><td colspan="8" class="empty">No included usage data</td></tr>'}</tbody>
           </table></div>
         </div>
+        <div class="report-lower-col">
+        ${promptCacheHtml(includedAccounts)}
         <div class="card top-models-card">
           <h2 class="card-title">Most used models · all time</h2>
           <div class="table-scroll"><table>
             <thead><tr><th>Model</th><th>Tokens</th><th>Cost</th></tr></thead>
             <tbody>${modelRows || '<tr><td colspan="3" class="empty">No included usage data</td></tr>'}</tbody>
           </table></div>
+        </div>
         </div>
       </div>
     </div>`;

@@ -2937,6 +2937,86 @@ async function getDevinAccountUsage(account, force, { rebuild = false } = {}) {
 }
 
 
+// --- prompt cache ------------------------------------------------------------
+//
+// The number this dashboard exists to show, alongside the bill: how much of
+// what you sent the model was served from its prompt cache rather than read
+// fresh. A cached input token costs a fraction of a fresh one - an eighth on
+// Claude, a tenth on the OpenAI rate card - so on a long agent session, where
+// the same context is resent every turn, the hit rate *is* the bill.
+//
+// Two figures, because caching is not free in both directions: reads save the
+// difference between the fresh and cached rates, and writes are billed above
+// the fresh rate. The honest number is what is left after the toll.
+
+/** Per-million rates for one model as {input, cacheRead, cacheWrite}, or null. */
+function cacheRatesFor(modelName, provider) {
+  const flat = (r) => r && { input: r.input, cacheRead: r.cachedInput, cacheWrite: r.input };
+  switch (provider) {
+    case 'claude': {
+      const r = claudeRatesFor(modelName, new Date().toISOString().slice(0, 10));
+      return r && { input: r.input, cacheRead: r.cacheRead, cacheWrite: r.cacheWrite };
+    }
+    case 'codex':
+      return flat(CODEX_PRICING[String(modelName || '').replace(/-\d{4}-\d{2}-\d{2}$/, '')]);
+    case 'devin':
+      return flat(CODEX_PRICING[devinBaseModel(modelName)]);
+    case 'antigravity':
+      return flat(ANTIGRAVITY_PRICING[normalizeAntigravityModelName(modelName)]);
+    default:
+      // OpenCode reports a billed total rather than per-channel rates, and
+      // Grok reports only a tick cost - so their tokens are counted and their
+      // saving is left unclaimed rather than guessed at.
+      return null;
+  }
+}
+
+function cacheStatsFor(models, provider) {
+  const out = {
+    freshInput: 0, cacheRead: 0, cacheWrite: 0, output: 0,
+    hitRate: 0, savedUsd: 0, writePremiumUsd: 0, netSavedUsd: 0,
+    wouldHaveCostUsd: 0, unpriced: false, models: [],
+  };
+  // Grok stashes reasoning tokens in the cacheWrite column to fit the shared
+  // four-column table, so reading it as cache here would invent a number.
+  if (provider === 'grok') return null;
+
+  for (const m of models || []) {
+    const t = m.tokens || {};
+    const input = t.input || 0;
+    const cacheRead = t.cacheRead || 0;
+    const cacheWrite = t.cacheWrite || 0;
+    out.freshInput += input;
+    out.cacheRead += cacheRead;
+    out.cacheWrite += cacheWrite;
+    out.output += t.output || 0;
+
+    const rates = cacheRatesFor(m.modelName, provider);
+    if (!rates) {
+      if (cacheRead || cacheWrite) out.unpriced = true;
+      continue;
+    }
+    const saved = (cacheRead * (rates.input - rates.cacheRead)) / 1e6;
+    const premium = (cacheWrite * (rates.cacheWrite - rates.input)) / 1e6;
+    out.savedUsd += saved;
+    out.writePremiumUsd += premium;
+    out.wouldHaveCostUsd += (cacheRead * rates.input) / 1e6;
+    const denom = input + cacheRead;
+    out.models.push({
+      modelName: m.modelName,
+      hitRate: denom ? cacheRead / denom : 0,
+      cacheRead,
+      freshInput: input,
+      savedUsd: saved - premium,
+    });
+  }
+  const denom = out.freshInput + out.cacheRead;
+  out.hitRate = denom ? out.cacheRead / denom : 0;
+  out.netSavedUsd = out.savedUsd - out.writePremiumUsd;
+  out.models.sort((a, b) => b.savedUsd - a.savedUsd);
+  return out;
+}
+
 async function getAccountUsage(account, force, { rescanFiles = false, rebuild = false } = {}) {
   let section;
   if (account.provider === 'claude') section = await getClaudeAccountUsage(account, force, { rescanFiles, rebuild });
@@ -2946,6 +3026,7 @@ async function getAccountUsage(account, force, { rescanFiles = false, rebuild = 
   else if (account.provider === 'opencode') section = await getOpencodeAccountUsage(account, force, { rebuild });
   else if (account.provider === 'devin') section = await getDevinAccountUsage(account, force, { rebuild });
   else throw new Error(`unknown provider ${account.provider}`);
+  section.cache = cacheStatsFor(section.models, account.provider);
   return { id: account.id, provider: account.provider, label: account.label, ...section };
 }
 
@@ -2974,7 +3055,10 @@ const DISK_CACHE_MS = 5 * 60_000;
 // Past this the cached reply is still served, but only while a refresh runs
 // behind it. Beyond it, a reader waits - data this old is a guess, not a memory.
 const STALE_MAX_MS = 60 * 60_000;
-const DISK_CACHE_VERSION = 3;
+// Bumped whenever the shape of an account section changes: the disk cache
+// holds whole replies, so a stale one silently serves the old shape and the
+// new field simply never appears (prompt-cache stats, added at v4).
+const DISK_CACHE_VERSION = 4;
 const DISK_CACHE_PATH = path.join(__dirname, 'usage-cache.json');
 const SCAN_INDEX_PATH = process.env.CC_USAGE_SCAN_INDEX || path.join(__dirname, 'scan-index.json');
 const fileCaches = [claudeSessionCache, codexRolloutCache, dbResultCache];
@@ -3388,6 +3472,8 @@ if (require.main === module) {
 module.exports = {
   detectAccounts,
   getUsage,
+  cacheStatsFor,
+  cacheRatesFor,
   parseAntigravityLocalStatus,
   postLocalLanguageServer,
   priceFolded,
