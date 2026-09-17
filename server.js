@@ -82,6 +82,14 @@ async function detectAccounts() {
     } catch {}
   }
 
+  if (!isProviderDisabled('devin') && DatabaseSync) {
+    const devinDb = process.env.DEVIN_DB || path.join(getDataHome(), 'devin', 'cli', 'sessions.db');
+    try {
+      await stat(devinDb);
+      accounts.push({ id: 'devin-default', provider: 'devin', label: 'default', dbPath: devinDb });
+    } catch {}
+  }
+
   return accounts;
 }
 
@@ -1119,6 +1127,7 @@ function grokUsageCostUsd(v) {
 // same assumption Claude Code itself defaults to.
 const CLAUDE_PRICING = {
   'claude-fable-5': { input: 10, output: 50, cacheWrite: 12.5, cacheRead: 1 },
+  'claude-fable-5-1': { input: 10, output: 50, cacheWrite: 12.5, cacheRead: 1 },
   'claude-mythos-5': { input: 10, output: 50, cacheWrite: 12.5, cacheRead: 1 },
   'claude-opus-5': { input: 5, output: 25, cacheWrite: 6.25, cacheRead: 0.5 },
   'claude-opus-4-8': { input: 5, output: 25, cacheWrite: 6.25, cacheRead: 0.5 },
@@ -1335,6 +1344,7 @@ function claudeDailyRecomputed(daily) {
 // 2026-07-30: OpenAI cut Luna 80% and Terra 20% (Sol unchanged).
 const CODEX_PRICING = {
   // input / cachedInput / output, $ per million tokens (standard, short context)
+  'gpt-6-astra': { input: 10, cachedInput: 1, output: 50 },
   'gpt-5.6-sol': { input: 5, cachedInput: 0.5, output: 30 },
   'gpt-5.6-terra': { input: 2, cachedInput: 0.2, output: 12 },
   'gpt-5.6-luna': { input: 0.2, cachedInput: 0.02, output: 1.2 },
@@ -2215,6 +2225,133 @@ async function getOpencodeAccountUsage(account, force) {
 }
 
 
+// --- Devin ------------------------------------------------------------------
+// Devin CLI and Devin Desktop share one store — the desktop app spawns the CLI
+// over ACP, so both land in ~/.local/share/devin/cli/sessions.db with
+// backend_type telling them apart ("windsurf" = desktop). Each assistant
+// message node carries the generation's token metrics. There is no local
+// rate-limit feed, and swe-* models have no public per-token rate (plan/ACU
+// billing), so cost is only filled in where a public OpenAI-equivalent rate
+// applies; the rest reports tokens with the unpriced flag.
+
+const DEVIN_TIER_SUFFIX = /-(?:fast|slow|medium|high|max|sidekick)(?=-|$)/g;
+
+function devinBaseModel(modelName) {
+  return String(modelName || '')
+    .replace(DEVIN_TIER_SUFFIX, '')
+    .replace(/^gpt-(\d+)-(\d+)/, 'gpt-$1.$2');
+}
+
+function devinProviderName(modelName) {
+  return /^gpt-/.test(modelName) ? 'OpenAI' : 'Cognition';
+}
+
+function devinModelCost(modelName, u) {
+  const rates = CODEX_PRICING[devinBaseModel(modelName)];
+  if (!rates) return null;
+  const cached = Number(u.cacheReadTokens) || 0;
+  const fresh = Math.max(0, (Number(u.inputTokens) || 0) - cached);
+  const out = Number(u.outputTokens) || 0;
+  return {
+    input: (fresh * rates.input) / 1e6,
+    output: (out * rates.output) / 1e6,
+    cacheWrite: 0,
+    cacheRead: (cached * rates.cachedInput) / 1e6,
+    total: (fresh * rates.input + cached * rates.cachedInput + out * rates.output) / 1e6,
+  };
+}
+
+function scanDevinSessions(dbPath) {
+  if (!DatabaseSync) return { daily: [], models: [], sources: [] };
+  const byDate = new Map();
+  const byModel = new Map();
+  const sources = new Set();
+  // The CLI rewrites an assistant node when its tool calls resolve, storing
+  // the same generation under the same request_id a second time — count each
+  // generation once.
+  const seenRequests = new Set();
+  let db;
+  try {
+    db = new DatabaseSync(dbPath, { readOnly: true });
+    const stmt = db.prepare(`
+      SELECT m.created_at AS ts, s.backend_type AS backend,
+        json_extract(m.chat_message, '$.metadata.request_id') AS requestId,
+        json_extract(m.chat_message, '$.metadata.generation_model') AS model,
+        json_extract(m.chat_message, '$.metadata.metrics.input_tokens') AS input,
+        json_extract(m.chat_message, '$.metadata.metrics.output_tokens') AS output,
+        json_extract(m.chat_message, '$.metadata.metrics.cache_read_tokens') AS cacheRead,
+        json_extract(m.chat_message, '$.metadata.metrics.cache_creation_tokens') AS cacheWrite
+      FROM message_nodes m
+      JOIN sessions s ON s.id = m.session_id
+      WHERE json_extract(m.chat_message, '$.metadata.metrics') IS NOT NULL
+    `);
+    for (const r of stmt.iterate()) {
+      if (r.requestId) {
+        if (seenRequests.has(r.requestId)) continue;
+        seenRequests.add(r.requestId);
+      }
+      let ts = Number(r.ts);
+      if (!ts || !Number.isFinite(ts)) continue;
+      if (ts > 1e12) ts = Math.floor(ts / 1000);
+      const date = new Date(ts * 1000).toISOString().slice(0, 10);
+      const modelName = r.model || 'unknown';
+      const tokens = {
+        inputTokens: Number(r.input) || 0,
+        outputTokens: Number(r.output) || 0,
+        cacheReadTokens: Number(r.cacheRead) || 0,
+        cacheCreationTokens: Number(r.cacheWrite) || 0,
+      };
+      const totalTokens = tokens.inputTokens + tokens.outputTokens + tokens.cacheReadTokens + tokens.cacheCreationTokens;
+      if (r.backend === 'windsurf') sources.add('Devin Desktop');
+      else if (r.backend) sources.add('Devin CLI');
+
+      const cost = devinModelCost(modelName, tokens);
+      const day = byDate.get(date) || { date, costUSD: 0, totalTokens: 0, unpriced: false };
+      day.totalTokens += totalTokens;
+      if (!cost) day.unpriced = true;
+      else day.costUSD += cost.total;
+      byDate.set(date, day);
+
+      const cur = byModel.get(modelName) || blankBreakdown(modelName, devinProviderName(modelName));
+      cur.tokens.input += tokens.inputTokens;
+      cur.tokens.output += tokens.outputTokens;
+      cur.tokens.cacheRead += tokens.cacheReadTokens;
+      cur.tokens.cacheWrite += tokens.cacheCreationTokens;
+      if (!cost) cur.unpriced = true;
+      else {
+        cur.cost.input += cost.input;
+        cur.cost.output += cost.output;
+        cur.cost.cacheRead += cost.cacheRead;
+        cur.cost.total += cost.input + cost.output + cost.cacheRead;
+        cur.pricingSource = 'OpenAI API equivalent';
+      }
+      byModel.set(modelName, cur);
+    }
+    db.close();
+  } catch {
+    try { db?.close(); } catch {}
+  }
+  return {
+    daily: [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date)),
+    models: [...byModel.values()].sort((a, b) => {
+      const tokenCount = (m) => m.tokens.input + m.tokens.output + m.tokens.cacheRead + m.tokens.cacheWrite;
+      return tokenCount(b) - tokenCount(a);
+    }),
+    sources: [...sources],
+  };
+}
+
+async function getDevinAccountUsage(account, force) {
+  const scanned = await scanDevinSessions(account.dbPath);
+  const section = summarize(scanned.daily, 'costUSD');
+  section.rateLimits = null;
+  section.models = scanned.models;
+  section.planLabel = null;
+  section.usageSources = scanned.sources.length ? scanned.sources : ['Devin CLI'];
+  return section;
+}
+
+
 async function getAccountUsage(account, force) {
   let section;
   if (account.provider === 'claude') section = await getClaudeAccountUsage(account, force);
@@ -2222,6 +2359,7 @@ async function getAccountUsage(account, force) {
   else if (account.provider === 'grok') section = await getGrokAccountUsage(account, force);
   else if (account.provider === 'antigravity') section = await getAntigravityAccountUsage(account, force);
   else if (account.provider === 'opencode') section = await getOpencodeAccountUsage(account, force);
+  else if (account.provider === 'devin') section = await getDevinAccountUsage(account, force);
   else throw new Error(`unknown provider ${account.provider}`);
   return { id: account.id, provider: account.provider, label: account.label, ...section };
 }

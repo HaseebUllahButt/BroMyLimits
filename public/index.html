@@ -237,6 +237,7 @@
   .dot.openai { background: var(--report-3); }
   .dot.google { background: var(--report-2); }
   .dot.xai { background: var(--report-6); }
+  .dot.devin { background: var(--report-5); }
   .dot.opencode { background: var(--report-4); }
   .tab:hover {
     color: var(--ink-soft);
@@ -1135,9 +1136,9 @@ const fmtTok = n => {
   return String(n || 0);
 };
 
-const dotClass = provider => provider === 'claude' ? 'anthropic' : provider === 'grok' ? 'xai' : provider === 'antigravity' ? 'google' : provider === 'opencode' ? 'opencode' : 'openai';
-const accentVar = provider => provider === 'claude' ? '--report-1' : provider === 'grok' ? '--report-6' : provider === 'antigravity' ? '--report-2' : provider === 'opencode' ? '--report-4' : '--report-3';
-const providerName = provider => provider === 'claude' ? 'Claude Code' : provider === 'grok' ? 'Grok CLI' : provider === 'antigravity' ? 'Antigravity' : provider === 'opencode' ? 'OpenCode' : 'Codex CLI';
+const dotClass = provider => provider === 'claude' ? 'anthropic' : provider === 'grok' ? 'xai' : provider === 'antigravity' ? 'google' : provider === 'opencode' ? 'opencode' : provider === 'devin' ? 'devin' : 'openai';
+const accentVar = provider => provider === 'claude' ? '--report-1' : provider === 'grok' ? '--report-6' : provider === 'antigravity' ? '--report-2' : provider === 'opencode' ? '--report-4' : provider === 'devin' ? '--report-5' : '--report-3';
+const providerName = provider => provider === 'claude' ? 'Claude Code' : provider === 'grok' ? 'Grok CLI' : provider === 'antigravity' ? 'Antigravity' : provider === 'opencode' ? 'OpenCode' : provider === 'devin' ? 'Devin' : 'Codex CLI';
 const accountTitle = a => {
   const lbl = (a.label || '').includes('@') ? 'default' : (a.label || 'default');
   return `${providerName(a.provider)} — ${lbl}`;
@@ -1181,7 +1182,7 @@ function toggleHidden(accountId, visible) {
 
 function settingsPanelHtml(accounts) {
   const hidden = getHidden();
-  const byProvider = { claude: [], codex: [], grok: [], antigravity: [], opencode: [] };
+  const byProvider = { claude: [], codex: [], grok: [], antigravity: [], opencode: [], devin: [] };
   for (const a of accounts) (byProvider[a.provider] || (byProvider[a.provider] = [])).push(a);
 
   const rows = (list) => list.map(a => `
@@ -1208,6 +1209,7 @@ function settingsPanelHtml(accounts) {
       ${section('Antigravity', byProvider.antigravity)}
       ${section('Grok CLI', byProvider.grok)}
       ${section('OpenCode', byProvider.opencode)}
+      ${section('Devin', byProvider.devin)}
     </div>
   `;
 }
@@ -1691,7 +1693,7 @@ function resetsAvailableLine(resetsAvailable) {
   return `<div class="limit-stale manual-reset">${parts.join(' · ')}</div>`;
 }
 
-const LIMITLESS_PROVIDERS = new Set(['opencode']);
+const LIMITLESS_PROVIDERS = new Set(['opencode', 'devin']);
 
 function limitsCard(account, rateLimits) {
   const note = lastRefreshNoteByAccount[account.id];
@@ -1715,7 +1717,7 @@ function limitsCard(account, rateLimits) {
   if (LIMITLESS_PROVIDERS.has(account.provider)) {
     return `
       <div class="limits-head"><h2 class="card-title">${heading}</h2></div>
-      <p class="empty">No subscription limits to show — usage is read locally from the OpenCode database.</p>${noteHtml}${freshness}`;
+      <p class="empty">No subscription limits to show — usage is read locally from the ${providerName(account.provider)} database.</p>${noteHtml}${freshness}`;
   }
   if (!rateLimits || !hasWindows) {
     return `
@@ -2171,7 +2173,7 @@ function ensureLayout(allAccounts, visibleAccounts) {
         <div class="panel-heading"><span class="dot ${dotClass(a.provider)}"></span>${accountTitle(a)}</div>
         ${a.usageSources?.length > 1 ? `<p class="usage-sources">Includes ${a.usageSources.slice(1).map(esc).join(' + ')}</p>` : ''}
         <p class="limit-stale usage-error" id="usage-error-${a.id}" hidden></p>
-        ${a.provider === 'opencode' ? '' : `<div class="card" id="limits-${a.id}"></div>`}
+        ${LIMITLESS_PROVIDERS.has(a.provider) ? '' : `<div class="card" id="limits-${a.id}"></div>`}
         <div class="stat-row" id="stats-${a.id}"></div>
          <div class="card models-card${a.provider === 'opencode' ? ' opencode-models-card' : ''}">
            <h2 class="card-title">Cost by model</h2>
@@ -2195,7 +2197,7 @@ function render(data) {
 
   if (!data.accounts || !data.accounts.length) {
     document.getElementById('tabs').innerHTML = '';
-    document.getElementById('panels').innerHTML = '<p class="empty">No Claude, Codex, Grok, Antigravity, or OpenCode accounts detected on this machine.</p>';
+    document.getElementById('panels').innerHTML = '<p class="empty">No Claude, Codex, Grok, Antigravity, OpenCode, or Devin accounts detected on this machine.</p>';
     return;
   }
 
