@@ -67,6 +67,7 @@ async function installFiles() {
         && !/^((claude|grok)-live-limits-.*\.json)$/.test(path.basename(source))
         && !relative.startsWith('limit-history')
         && !relative.startsWith('usage-cache')
+        && !relative.startsWith('scan-index')
         && relative !== 'grok-live-limits-grok-default.json';
     },
   });

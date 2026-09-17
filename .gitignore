@@ -2,6 +2,9 @@
 claude-live-limits-*.json
 grok-live-limits-*.json
 usage-cache.json
+# Per-file scan rollups. Derived from local transcripts, rebuilt on demand,
+# and personal data by way of the file paths it keys on.
+scan-index.json
 
 # Limit-history ledger — a per-machine record of this user's own usage.
 # Never committed: the live file is personal data and the backfill is derived

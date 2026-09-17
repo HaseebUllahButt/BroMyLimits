@@ -7,6 +7,7 @@ const path = require('node:path');
 const { detectProfileAccounts, getHomeDir, isProviderDisabled } = require('./profile-discovery');
 const { resolveCcusageCommand, runCcusage: runCcusageCommand } = require('./ccusage-runner');
 const limitHistory = require('./limit-history');
+const { FileRollupCache, ResultCache, loadIndex, saveIndex, blankStats, addStats } = require('./scan-cache');
 
 let DatabaseSync;
 try {
@@ -251,7 +252,7 @@ async function postAntigravity(pathname, token, body = {}) {
       let data;
       try { data = JSON.parse(text); } catch { data = {}; }
       if (res.ok) return data;
-      lastError = `${pathname} ${res.status}`;
+      lastError = `${pathname} ${res.status}: ${data?.error?.message || text.slice(0, 200)}`;
     } catch (error) {
       lastError = error instanceof Error ? error.message : String(error);
     }
@@ -304,6 +305,42 @@ async function fetchLiveAntigravityRateLimits(token) {
   return parseAntigravityRateLimits(summary, assist);
 }
 
+// --- failing providers ------------------------------------------------------
+//
+// A rate-limit endpoint that is down gets retried on the same cadence as one
+// that works, so a permanently broken account (an Antigravity login that
+// answers "Verify your account to continue") pays its full network timeout on
+// every single pass - measured at 5.6s of a 9.5s refresh, for a number that
+// was never going to arrive. Consecutive failures back off; one success
+// forgets the whole history.
+const FAIL_BACKOFF_MS = [60_000, 5 * 60_000, 15 * 60_000, 60 * 60_000];
+const failureState = new Map(); // key -> { n, at, message }
+
+function failureHold(key) {
+  const f = failureState.get(key);
+  if (!f) return false;
+  const wait = FAIL_BACKOFF_MS[Math.min(f.n - 1, FAIL_BACKOFF_MS.length - 1)];
+  return Date.now() - f.at < wait;
+}
+
+function noteFailure(key, message) {
+  const prev = failureState.get(key);
+  failureState.set(key, { n: (prev?.n || 0) + 1, at: Date.now(), message });
+}
+
+function clearFailure(key) {
+  failureState.delete(key);
+}
+
+/** What is currently being skipped, and for how long - for the cache panel. */
+function failureReport() {
+  const now = Date.now();
+  return [...failureState.entries()].map(([key, f]) => {
+    const wait = FAIL_BACKOFF_MS[Math.min(f.n - 1, FAIL_BACKOFF_MS.length - 1)];
+    return { key, failures: f.n, message: f.message, retryInMs: Math.max(0, wait - (now - f.at)) };
+  });
+}
+
 async function getAntigravityRateLimits(account, force = false) {
   const now = Date.now();
   const cached = antigravityLimits.get(account.id);
@@ -313,14 +350,28 @@ async function getAntigravityRateLimits(account, force = false) {
   if (!force && now - (lastAntigravityLiveAttemptAt.get(account.id) || 0) < ANTIGRAVITY_LIVE_REFRESH_MS) {
     return cached ? cached.value : null;
   }
+  // An account that keeps refusing is not worth a timeout every pass.
+  const failKey = `antigravity:${account.id}`;
+  if (!force && failureHold(failKey)) {
+    return cached ? cached.value : { error: failureState.get(failKey)?.message, backingOff: true };
+  }
   lastAntigravityLiveAttemptAt.set(account.id, now);
   try {
     const token = await getAntigravityAccessToken();
     const fresh = await fetchLiveAntigravityRateLimits(token);
     antigravityLimits.set(account.id, { value: fresh, at: now });
+    clearFailure(failKey);
     return fresh;
-  } catch {
-    return cached ? cached.value : null;
+  } catch (error) {
+    const message = error?.message || String(error);
+    noteFailure(failKey, message);
+    const { n } = failureState.get(failKey);
+    // Say it once per escalation, not once per pass: this used to print every
+    // five minutes forever.
+    if (n <= FAIL_BACKOFF_MS.length) {
+      console.error(`cc-usage-dashboard: Antigravity rate-limit fetch failed (${n}x, backing off): ${message}`);
+    }
+    return cached ? cached.value : { error: message };
   }
 }
 
@@ -1356,18 +1407,33 @@ const CODEX_PRICING = {
   'gpt-5.4-pro': { input: 30, cachedInput: 30, output: 180 },
 };
 
-function codexModelCost(modelName, v) {
-  // ccusage session/daily JSON reports cacheCreationTokens as 0 for Codex
-  // (OpenAI auto-caches, no separate write charge) and cacheReadTokens as
-  // the cached-input count; inputTokens is fresh (uncached) input.
-  const rates = CODEX_PRICING[modelName.replace(/-\d{4}-\d{2}-\d{2}$/, '')];
-  if (!rates) return null; // unknown model — surfaced as null so the UI can flag it instead of silently showing $0
+const CODEX_CUTOVER_MS = Date.parse('2026-07-30T00:00:00Z');
+const CODEX_PRICING_PRE_CUT = {
+  'gpt-5.6-luna': { input: 1.0, cachedInput: 0.1, output: 6 },
+  'gpt-5.6-terra': { input: 2.5, cachedInput: 0.25, output: 15 },
+};
+
+function codexTurnCost(modelName, u, timestamp) {
+  const key = String(modelName || '').replace(/-\d{4}-\d{2}-\d{2}$/, '');
+  const ms = timestamp ? Date.parse(timestamp) : NaN;
+  const usePreCut = Number.isFinite(ms) && ms < CODEX_CUTOVER_MS && CODEX_PRICING_PRE_CUT[key];
+  const rates = usePreCut ? CODEX_PRICING_PRE_CUT[key] : CODEX_PRICING[key];
+  if (!rates) return null;
+  const cached = Number(u.cached_input_tokens ?? u.cacheReadTokens) || 0;
+  const rawInput = Number(u.input_tokens ?? u.inputTokens) || 0;
+  const fresh = Math.max(0, rawInput - cached);
+  const out = Number(u.output_tokens ?? u.outputTokens) || 0;
   return {
-    input: ((v.inputTokens || 0) * rates.input) / 1_000_000,
-    output: ((v.outputTokens || 0) * rates.output) / 1_000_000,
+    input: (fresh * rates.input) / 1e6,
+    output: (out * rates.output) / 1e6,
     cacheWrite: 0,
-    cacheRead: ((v.cacheReadTokens || 0) * rates.cachedInput) / 1_000_000,
+    cacheRead: (cached * rates.cachedInput) / 1e6,
+    total: (fresh * rates.input + cached * rates.cachedInput + out * rates.output) / 1e6,
   };
+}
+
+function codexModelCost(modelName, v, timestamp) {
+  return codexTurnCost(modelName, v, timestamp);
 }
 
 function modelTableFromCodexSessions(sessions) {
@@ -1415,26 +1481,142 @@ function codexDailyFromSessions(sessions) {
   return [...byDate.values()];
 }
 
-async function getClaudeAccountUsage(account, force) {
-  let claudeDailyRaw = { daily: [] };
-  let usageError = null;
-  const [dailyResult, rateLimits] = await Promise.all([
-    runCcusage(['claude', 'daily', '--json', '-O'], { CLAUDE_CONFIG_DIR: account.configDir })
-      .then((value) => ({ value }))
-      .catch((error) => ({ error })),
+// ------------------------------------------------------------------ scanning
+//
+// Both session scanners keep raw token counts per (date, model) and price them
+// at read time. Caching the *dollars* instead - which is what this used to do -
+// meant an edit to a rate table below never reached a file whose mtime had not
+// changed, and an archived session's mtime never changes again.
+
+const claudeSessionCache = new FileRollupCache({
+  id: 'claude',
+  parser: {
+    initState: () => ({ seen: [] }),
+    // A cheap reject before JSON.parse: most lines in a transcript are not
+    // assistant turns, and parsing them all is the bulk of a cold scan.
+    wants: (line) => line.includes('"type":"assistant"') || line.includes('"role":"assistant"'),
+    line: (d, state, add) => {
+      if (d.type !== 'assistant' && d.message?.role !== 'assistant') return;
+      const msg = d.message || d;
+      const u = msg.usage || d.usage;
+      if (!u) return;
+
+      // Claude Code occasionally writes the same assistant message twice in a
+      // row. The ring only has to look back a few lines to catch that, and it
+      // is bounded so an index entry cannot grow with the transcript.
+      const msgId = msg.id || d.requestId || d.uuid;
+      if (msgId) {
+        if (state.seen.includes(msgId)) return;
+        state.seen.push(msgId);
+      }
+
+      const rawModel = msg.model || d.model || 'claude-sonnet-5';
+      if (rawModel === '<synthetic>') return;
+      const model = normalizeClaudeModel(rawModel);
+
+      const rawTs = d.timestamp || msg.timestamp;
+      const ts = typeof rawTs === 'number'
+        ? new Date(rawTs > 1e12 ? rawTs : rawTs * 1000).toISOString()
+        : String(rawTs || '');
+      const date = ts.slice(0, 10);
+      if (!date) return;
+
+      const input = Number(u.input_tokens ?? u.inputTokens) || 0;
+      const output = Number(u.output_tokens ?? u.outputTokens) || 0;
+      const cacheWrite = Number(u.cache_creation_input_tokens ?? u.cacheCreationTokens) || 0;
+      const cacheRead = Number(u.cache_read_input_tokens ?? u.cacheReadTokens) || 0;
+      add(date, model, { input, output, cacheWrite, cacheRead, total: input + output + cacheWrite + cacheRead });
+    },
+  },
+});
+
+async function scanClaudeSessionFiles(projectsDir) {
+  const files = [];
+  async function walk(dir) {
+    let entries;
+    try {
+      entries = await readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) await walk(full);
+      else if (e.isFile() && e.name.endsWith('.jsonl')) files.push(full);
+    }
+  }
+  await walk(projectsDir);
+  return files;
+}
+
+/**
+ * Turn `date|model -> tokens` into the daily rows and per-model breakdown the
+ * API already speaks. Pricing happens here, once per (date, model) pair, so a
+ * rate table edit is reflected on the next read with no rescan at all.
+ */
+function priceFolded(folded, priceFor) {
+  const byDate = new Map();
+  const byModel = new Map();
+  for (const [key, t] of folded) {
+    const cut = key.indexOf('|');
+    const date = key.slice(0, cut);
+    const model = key.slice(cut + 1);
+    const cost = priceFor(model, t, date);
+
+    const day = byDate.get(date) || { date, costUSD: 0, totalTokens: 0, unpriced: false };
+    day.totalTokens += t.total || 0;
+    if (cost) day.costUSD += cost.total;
+    else day.unpriced = true;
+    byDate.set(date, day);
+
+    const cur = byModel.get(model) || blankBreakdown(model, providerOf(model));
+    cur.tokens.input += t.input || 0;
+    cur.tokens.output += t.output || 0;
+    cur.tokens.cacheWrite += t.cacheWrite || 0;
+    cur.tokens.cacheRead += t.cacheRead || 0;
+    if (t.reasoning) cur.tokens.reasoning = (cur.tokens.reasoning || 0) + t.reasoning;
+    if (cost) {
+      cur.cost.input += cost.input;
+      cur.cost.output += cost.output;
+      cur.cost.cacheWrite += cost.cacheWrite;
+      cur.cost.cacheRead += cost.cacheRead;
+      cur.cost.total += cost.total;
+    } else {
+      cur.unpriced = true;
+    }
+    byModel.set(model, cur);
+  }
+  return {
+    daily: [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date)),
+    models: [...byModel.values()].sort((a, b) => b.cost.total - a.cost.total),
+  };
+}
+
+function claudeBucketCost(model, t, date) {
+  const c = claudeModelCost(model, {
+    inputTokens: t.input, outputTokens: t.output,
+    cacheCreationTokens: t.cacheWrite, cacheReadTokens: t.cacheRead,
+  }, date);
+  return c && { ...c, total: c.input + c.output + c.cacheWrite + c.cacheRead };
+}
+
+async function scanClaudeSessions(configDir, opts = {}) {
+  const root = path.join(configDir, 'projects');
+  const files = await scanClaudeSessionFiles(root);
+  const stats = await claudeSessionCache.scan(files, { ...opts, root });
+  return { ...priceFolded(claudeSessionCache.fold(files), claudeBucketCost), stats };
+}
+
+async function getClaudeAccountUsage(account, force, { rescanFiles = false, rebuild = false } = {}) {
+  const [scanned, rateLimits] = await Promise.all([
+    scanClaudeSessions(account.configDir, { force: rescanFiles, rebuild }),
     getClaudeRateLimits(account, force),
   ]);
-  if (dailyResult.error) {
-    usageError = dailyResult.error.message;
-    console.warn(`cc-usage-dashboard: Claude token scan failed: ${usageError}`);
-  } else {
-    claudeDailyRaw = dailyResult.value;
-  }
-  const rawRows = claudeDailyRaw.daily || [];
-  const section = summarize(claudeDailyRecomputed(rawRows), 'totalCost');
+  const section = summarize(scanned.daily, 'costUSD');
   section.rateLimits = rateLimits;
-  section.models = claudeModelTable(rawRows);
-  if (usageError) section.usageError = usageError;
+  section.models = scanned.models;
+  section.usageSources = ['Claude Code'];
+  section.scan = scanned.stats;
   return section;
 }
 
@@ -1579,33 +1761,160 @@ function mergeCodexModels(nativeModels, piModels) {
   return [...byModel.values()].sort((a, b) => b.cost.total - a.cost.total);
 }
 
-async function getCodexAccountUsage(account, force) {
-  const [sessionsResult, harnessUsage, rateLimits] = await Promise.all([
-    runCcusage(['codex', 'session', '--json', '-O'], { CODEX_HOME: account.configDir })
-      .then((value) => ({ value }))
-      .catch((error) => ({ error })),
-    scanCodexHarnessSessions(),
-    getCodexRateLimits(account, force),
+function formatCodexLocalRateLimits(limits, timestampMs) {
+  if (!limits) return null;
+  const toEntry = (w) => (w && typeof w.used_percent === 'number'
+    ? {
+        percent: w.used_percent,
+        resetsAt: w.resets_at ? new Date((w.resets_at > 1e12 ? w.resets_at : w.resets_at * 1000)).toISOString() : null,
+      }
+    : null);
+  const windows = [limits.primary, limits.secondary].filter(Boolean);
+  let weekly = null;
+  let session = null;
+  for (const w of windows) {
+    const mins = Number(w.window_minutes) || (Number(w.limit_window_seconds) ? Math.round(w.limit_window_seconds / 60) : 0);
+    const entry = toEntry(w);
+    if (mins >= 10080 - 60) weekly = entry;
+    else if (mins >= 300 - 30) session = entry;
+    else {
+      if (!weekly) weekly = entry;
+      else if (!session) session = entry;
+    }
+  }
+  const credits = limits.credits?.has_credits
+    ? {
+        balance: Number(limits.credits.balance),
+        approxLocalMessages: limits.credits.approx_local_messages || null,
+        approxCloudMessages: limits.credits.approx_cloud_messages || null,
+      }
+    : null;
+  const ageMinutes = timestampMs ? Math.max(0, Math.round((Date.now() - timestampMs) / 60000)) : 0;
+  return {
+    fetchedAtMs: timestampMs || Date.now(),
+    ageMinutes,
+    live: ageMinutes <= 5,
+    weekly,
+    session,
+    credits,
+    planLabel: limits.plan_type ? limits.plan_type.charAt(0).toUpperCase() + limits.plan_type.slice(1) : null,
+  };
+}
+
+const codexRolloutCache = new FileRollupCache({
+  id: 'codex',
+  parser: {
+    // `model` has to survive an incremental read: a rollout names it once in a
+    // turn_context near the top and every token_count after it is that model,
+    // so a tail parsed without it would bill the whole session to the default.
+    initState: () => ({ model: null, limit: null }),
+    wants: (line) => line.includes('"token_count"') || line.includes('"turn_context"'),
+    line: (d, state, add) => {
+      const p = d.payload || {};
+      if (d.type === 'turn_context' || p.type === 'turn_context') {
+        if (p.model) state.model = p.model;
+        return;
+      }
+      if (p.type !== 'token_count') return;
+
+      const ts = d.timestamp;
+      const date = String(ts || '').slice(0, 10);
+      if (!date) return;
+
+      if (p.rate_limits) {
+        const ms = ts ? Date.parse(ts) : 0;
+        if (!state.limit || ms > state.limit.timestampMs) state.limit = { timestampMs: ms, limits: p.rate_limits };
+      }
+
+      const u = (p.info || {}).last_token_usage || {};
+      const cacheRead = Number(u.cached_input_tokens) || 0;
+      const input = Math.max(0, (Number(u.input_tokens) || 0) - cacheRead);
+      const output = Number(u.output_tokens) || 0;
+      const reasoning = Number(u.reasoning_output_tokens) || 0;
+      const total = Number(u.total_tokens) || (input + cacheRead + output);
+      add(date, state.model || 'gpt-5.6-luna', { input, output, cacheRead, reasoning, total });
+    },
+  },
+});
+
+async function scanCodexSessionFiles(sessionsDir) {
+  const files = [];
+  async function walk(dir) {
+    let entries;
+    try {
+      entries = await readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) await walk(full);
+      else if (e.isFile() && e.name.endsWith('.jsonl')) files.push(full);
+    }
+  }
+  await walk(sessionsDir);
+  return files;
+}
+
+// The bucket already holds fresh input separately from cached, so this prices
+// it directly rather than going through codexTurnCost's raw-minus-cached step.
+function codexBucketCost(model, t, date) {
+  const key = String(model || '').replace(/-\d{4}-\d{2}-\d{2}$/, '');
+  const ms = date ? Date.parse(date) : NaN;
+  const rates = (Number.isFinite(ms) && ms < CODEX_CUTOVER_MS && CODEX_PRICING_PRE_CUT[key])
+    ? CODEX_PRICING_PRE_CUT[key]
+    : CODEX_PRICING[key];
+  if (!rates) return null;
+  const input = (t.input * rates.input) / 1e6;
+  const cacheRead = (t.cacheRead * rates.cachedInput) / 1e6;
+  const output = (t.output * rates.output) / 1e6;
+  return { input, output, cacheWrite: 0, cacheRead, total: input + output + cacheRead };
+}
+
+async function scanCodexSessions(configDir, opts = {}) {
+  const root = path.join(configDir, 'sessions');
+  const files = await scanCodexSessionFiles(root);
+  const stats = await codexRolloutCache.scan(files, { ...opts, root });
+  const priced = priceFolded(codexRolloutCache.fold(files), codexBucketCost);
+
+  let latestLimit = null;
+  let latestLimitTime = 0;
+  for (const state of codexRolloutCache.states(files)) {
+    if (state?.limit && state.limit.timestampMs > latestLimitTime) {
+      latestLimitTime = state.limit.timestampMs;
+      latestLimit = state.limit.limits;
+    }
+  }
+
+  return {
+    ...priced,
+    stats,
+    rateLimits: formatCodexLocalRateLimits(latestLimit, latestLimitTime),
+  };
+}
+
+async function getCodexAccountUsage(account, force, { rescanFiles = false, rebuild = false } = {}) {
+  const [scanned, liveLimits] = await Promise.all([
+    scanCodexSessions(account.configDir, { force: rescanFiles, rebuild }),
+    getCodexRateLimits(account, force).catch(() => null),
   ]);
-  const sessionsRaw = sessionsResult.value || { sessions: [] };
-  const sessions = sessionsRaw.sessions || sessionsRaw.session || [];
-  const nativeDaily = codexDailyFromSessions(sessions);
-  const nativeModels = modelTableFromCodexSessions(sessions);
 
-  const mergedDaily = mergeCodexDaily(nativeDaily, harnessUsage.daily);
-  const mergedModels = mergeCodexModels(nativeModels, harnessUsage.models);
+  let rateLimits = scanned.rateLimits;
+  if (liveLimits) {
+    rateLimits = {
+      ...scanned.rateLimits,
+      ...liveLimits,
+      credits: liveLimits.credits || scanned.rateLimits?.credits,
+      planLabel: liveLimits.planLabel || scanned.rateLimits?.planLabel,
+    };
+  }
 
-  const section = summarize(mergedDaily, 'costUSD');
+  const section = summarize(scanned.daily, 'costUSD');
   section.rateLimits = rateLimits;
-  section.models = mergedModels;
+  section.models = scanned.models;
   section.usageSources = ['Codex CLI'];
-  for (const [source, count] of Object.entries(harnessUsage.sourceCounts)) {
-    if (count) section.usageSources.push(`${source} (${count} Codex responses)`);
-  }
-  if (sessionsResult.error) {
-    section.usageError = sessionsResult.error.message;
-    console.warn(`cc-usage-dashboard: Codex token scan failed: ${section.usageError}`);
-  }
+  section.planLabel = rateLimits?.planLabel || null;
+  section.scan = scanned.stats;
   return section;
 }
 
@@ -1869,7 +2178,7 @@ function decodeAntigravityStep(payload) {
   };
 }
 
-async function scanNativeAntigravitySessions() {
+async function scanNativeAntigravitySessionsUncached() {
   if (!DatabaseSync) return { daily: [], models: [] };
   const conversationsDir = path.join(getAntigravityDataDir(), 'conversations');
   const byDate = new Map();
@@ -1960,7 +2269,7 @@ function mergeAntigravityUsage(...scans) {
   return { daily: [...byDate.values()], models: [...byModel.values()] };
 }
 
-async function scanPiAntigravitySessions() {
+async function scanPiAntigravitySessionsUncached(excludeDates = new Set()) {
   const byDate = new Map();
   const byModel = new Map();
   const piSessionsDir = getPiSessionsDir();
@@ -1991,6 +2300,12 @@ async function scanPiAntigravitySessions() {
             : String(rawTimestamp || '');
           const date = timestamp.slice(0, 10);
           if (!date) return;
+          // Pi drives Antigravity through the same local antigravity-cli
+          // backend, which independently logs the identical exchange into
+          // its own conversations DB (see scanNativeAntigravitySessions).
+          // On any date the native scan already covers, counting Pi's copy
+          // too would double-bill the same tokens/cost.
+          if (excludeDates.has(date)) return;
 
           const inputTok = Number(u.input ?? u.inputTokens) || 0;
           const outputTok = Number(u.output ?? u.outputTokens) || 0;
@@ -2030,17 +2345,48 @@ async function scanPiAntigravitySessions() {
   };
 }
 
-async function getAntigravityAccountUsage(account, force) {
-  const [rateLimits, piUsage, nativeUsage] = await Promise.all([
+/** The 82-odd conversation databases Antigravity keeps, and their WALs. */
+async function antigravityDbFiles() {
+  const dir = path.join(getAntigravityDataDir(), 'conversations');
+  let names = [];
+  try { names = await readdir(dir); } catch { return []; }
+  const out = [];
+  for (const n of names) {
+    if (!n.endsWith('.db') || n === 'conversation_summaries.db') continue;
+    out.push(path.join(dir, n), path.join(dir, `${n}-wal`));
+  }
+  return out.sort();
+}
+
+async function scanNativeAntigravitySessions(stats, opts) {
+  const paths = await antigravityDbFiles();
+  if (!paths.length) return scanNativeAntigravitySessionsUncached();
+  return cachedScan('antigravity-native', paths, scanNativeAntigravitySessionsUncached, stats, opts);
+}
+
+async function scanPiAntigravitySessions(excludeDates, stats, opts) {
+  const paths = (await jsonlFilesUnder(getPiSessionsDir())).sort();
+  if (!paths.length) return scanPiAntigravitySessionsUncached(excludeDates);
+  // The exclude set is derived from the native scan, so it belongs in the key:
+  // the same files with a different exclusion are a different answer.
+  const key = `antigravity-pi:${[...excludeDates].sort().join(',')}`;
+  return cachedScan(key, paths, () => scanPiAntigravitySessionsUncached(excludeDates), stats, opts);
+}
+
+async function getAntigravityAccountUsage(account, force, { rebuild = false } = {}) {
+  const stats = blankStats();
+  const [rateLimits, nativeUsage] = await Promise.all([
     getAntigravityRateLimits(account, force),
-    scanPiAntigravitySessions(),
-    scanNativeAntigravitySessions(),
+    scanNativeAntigravitySessions(stats, { rebuild }),
   ]);
+  const nativeDates = new Set(nativeUsage.daily.map((row) => row.date));
+  const piUsage = await scanPiAntigravitySessions(nativeDates, stats, { rebuild });
   const usage = mergeAntigravityUsage(piUsage, nativeUsage);
   const section = summarize(usage.daily, 'costUSD');
   section.rateLimits = rateLimits;
   section.models = usage.models;
   section.planLabel = rateLimits?.planLabel || null;
+  section.scan = stats;
   return section;
 }
 
@@ -2100,7 +2446,63 @@ function opencodeDeepseekCost(modelName, usage, timestampMs) {
   };
 }
 
-function scanOpencodeSessions(dbPath) {
+// --- database scans, kept until the database moves ---------------------------
+//
+// Devin's store is 1.06GB with a 610MB WAL beside it and OpenCode's is 1.24GB;
+// scanning either means walking every message row. Measured on a warm pass,
+// that was 3.9s and 0.7s respectively - spent every single refresh, including
+// the overwhelming majority where the agent had not been used since the last
+// one and the answer could not possibly have changed.
+const dbResultCache = new ResultCache({ id: 'db' });
+
+/**
+ * The database plus the WAL, which is where a committed write actually lands.
+ *
+ * Deliberately NOT the -shm sidecar. That file is shared-memory coordination
+ * state, not data, and merely opening the database read-only rewrites its
+ * mtime - measured on the 1GB Devin store, a single read-only count(*) moved
+ * it while the database and the WAL stayed byte-identical. Signing on it made
+ * the cache invalidate itself: every scan dirtied the thing it was watching,
+ * so the next scan re-read all 1GB, for ever. A write always lands in the WAL
+ * (or is checkpointed into the database), so those two are the whole story.
+ */
+const dbFiles = (dbPath) => [dbPath, `${dbPath}-wal`];
+
+/** Total bytes of a path list, for reporting what a hit avoided reading. */
+async function bytesOf(paths) {
+  let total = 0;
+  for (const p of paths) {
+    try { total += (await stat(p)).size; } catch { /* absent sidecar */ }
+  }
+  return total;
+}
+
+/**
+ * Run `work` only if one of `paths` has moved since last time.
+ *
+ * The JSONL scanners read appended bytes; this is for the scans that have no
+ * such seam - a SQLite aggregation, or a walk that folds dozens of stores into
+ * one answer. Stat is cheap and the answer is usually "nothing changed",
+ * because an agent you are not using right now cannot have produced new usage.
+ */
+async function cachedScan(key, paths, work, stats, { rebuild = false } = {}) {
+  if (stats) stats.dbs++;
+  const { hit, sig, value } = await dbResultCache.lookup(key, paths, { force: rebuild });
+  if (hit) {
+    if (stats) { stats.dbHits++; stats.dbBytesSkipped += await bytesOf(paths); }
+    return value;
+  }
+  const fresh = await work();
+  dbResultCache.store(key, sig, fresh);
+  if (stats) stats.dbScans++;
+  return fresh;
+}
+
+async function scanDatabase(kind, dbPath, run, stats, opts) {
+  return cachedScan(`${kind}:${dbPath}`, dbFiles(dbPath), () => run(dbPath), stats, opts);
+}
+
+function scanOpencodeSessionsUncached(dbPath) {
   if (!DatabaseSync) return { daily: [], models: [] };
   const byDate = new Map();
   const byModel = new Map();
@@ -2215,12 +2617,14 @@ function scanOpencodeSessions(dbPath) {
   };
 }
 
-async function getOpencodeAccountUsage(account, force) {
-  const scanned = await scanOpencodeSessions(account.dbPath);
+async function getOpencodeAccountUsage(account, force, { rebuild = false } = {}) {
+  const stats = blankStats();
+  const scanned = await scanDatabase('opencode', account.dbPath, scanOpencodeSessionsUncached, stats, { rebuild });
   const section = summarize(scanned.daily, 'costUSD');
   section.rateLimits = null;
   section.models = scanned.models;
   section.planLabel = null;
+  section.scan = stats;
   return section;
 }
 
@@ -2261,7 +2665,7 @@ function devinModelCost(modelName, u) {
   };
 }
 
-function scanDevinSessions(dbPath) {
+function scanDevinSessionsUncached(dbPath) {
   if (!DatabaseSync) return { daily: [], models: [], sources: [] };
   const byDate = new Map();
   const byModel = new Map();
@@ -2341,38 +2745,60 @@ function scanDevinSessions(dbPath) {
   };
 }
 
-async function getDevinAccountUsage(account, force) {
-  const scanned = await scanDevinSessions(account.dbPath);
+async function getDevinAccountUsage(account, force, { rebuild = false } = {}) {
+  const stats = blankStats();
+  const scanned = await scanDatabase('devin', account.dbPath, scanDevinSessionsUncached, stats, { rebuild });
   const section = summarize(scanned.daily, 'costUSD');
   section.rateLimits = null;
   section.models = scanned.models;
   section.planLabel = null;
   section.usageSources = scanned.sources.length ? scanned.sources : ['Devin CLI'];
+  section.scan = stats;
   return section;
 }
 
 
-async function getAccountUsage(account, force) {
+async function getAccountUsage(account, force, { rescanFiles = false, rebuild = false } = {}) {
   let section;
-  if (account.provider === 'claude') section = await getClaudeAccountUsage(account, force);
-  else if (account.provider === 'codex') section = await getCodexAccountUsage(account, force);
+  if (account.provider === 'claude') section = await getClaudeAccountUsage(account, force, { rescanFiles, rebuild });
+  else if (account.provider === 'codex') section = await getCodexAccountUsage(account, force, { rescanFiles, rebuild });
   else if (account.provider === 'grok') section = await getGrokAccountUsage(account, force);
-  else if (account.provider === 'antigravity') section = await getAntigravityAccountUsage(account, force);
-  else if (account.provider === 'opencode') section = await getOpencodeAccountUsage(account, force);
-  else if (account.provider === 'devin') section = await getDevinAccountUsage(account, force);
+  else if (account.provider === 'antigravity') section = await getAntigravityAccountUsage(account, force, { rebuild });
+  else if (account.provider === 'opencode') section = await getOpencodeAccountUsage(account, force, { rebuild });
+  else if (account.provider === 'devin') section = await getDevinAccountUsage(account, force, { rebuild });
   else throw new Error(`unknown provider ${account.provider}`);
   return { id: account.id, provider: account.provider, label: account.label, ...section };
 }
 
+// ------------------------------------------------------------------- caching
+//
+// Four tiers, cheapest first, and the expensive one is now the one that is
+// persisted. It used to be the other way round: the 34KB aggregate was written
+// to disk and the parse work behind it (1.8GB of rollouts, 8-16s) lived only in
+// memory, so every restart - which the deploy procedure does on every change -
+// rebuilt it from nothing.
+//
+//   memory   the whole reply, for rapid polls
+//   disk     the same reply, so a restart answers immediately
+//   index    per-file token rollups (scan-cache.js), so a restart does not rescan
+//   files    the only tier that touches a session log, and only its new bytes
+//
+// What a reader gets is never allowed to depend on how long the scan takes:
+// a stale reply goes out at once and the refresh happens behind it.
+
 let cache = null;
 let cacheAt = 0;
+let inflight = null;
+let lastScan = { at: 0, ms: 0, stats: blankStats(), timings: [], indexLoaded: false, indexSavedAt: 0 };
 const CACHE_MS = 30_000;
-// Heavy scans (Grok's sessions dir alone is >1GB) rerun as little as possible:
-// the in-memory cache deals with rapid polls, the disk cache survives restarts
-// and stops the poll loop from rescanning everything more than every 5 minutes.
 const DISK_CACHE_MS = 5 * 60_000;
-const DISK_CACHE_VERSION = 2;
+// Past this the cached reply is still served, but only while a refresh runs
+// behind it. Beyond it, a reader waits - data this old is a guess, not a memory.
+const STALE_MAX_MS = 60 * 60_000;
+const DISK_CACHE_VERSION = 3;
 const DISK_CACHE_PATH = path.join(__dirname, 'usage-cache.json');
+const SCAN_INDEX_PATH = process.env.CC_USAGE_SCAN_INDEX || path.join(__dirname, 'scan-index.json');
+const fileCaches = [claudeSessionCache, codexRolloutCache, dbResultCache];
 
 async function loadDiskCache() {
   if (!existsSync(DISK_CACHE_PATH)) return null;
@@ -2381,7 +2807,8 @@ async function loadDiskCache() {
     const data = JSON.parse(raw);
     if (!data || data.cacheVersion !== DISK_CACHE_VERSION || !Array.isArray(data.accounts)) return null;
     data.accounts = data.accounts.filter((account) => !isProviderDisabled(account.provider));
-    if (Date.now() - Date.parse(data.fetchedAt) > DISK_CACHE_MS) return null;
+    const age = Date.now() - Date.parse(data.fetchedAt);
+    if (!(age >= 0) || age > STALE_MAX_MS) return null;
     return data;
   } catch {
     return null;
@@ -2390,6 +2817,26 @@ async function loadDiskCache() {
 
 function saveDiskCache(value) {
   writeFile(DISK_CACHE_PATH, JSON.stringify(value), 'utf8').catch(() => {});
+}
+
+/**
+ * Read the per-file index back at startup. Without this the first refresh
+ * after a restart re-parses every session log on the machine; with it, the
+ * same refresh is a few hundred stat calls.
+ */
+async function primeScanIndex() {
+  const t0 = Date.now();
+  const ok = await loadIndex(SCAN_INDEX_PATH, fileCaches);
+  lastScan.indexLoaded = ok;
+  if (ok) {
+    const files = fileCaches.reduce((n, c) => n + c.entries.size, 0);
+    console.log(`cc-usage-dashboard: scan index restored (${files} files, ${Date.now() - t0}ms) - no cold rescan needed`);
+  }
+  return ok;
+}
+
+async function persistScanIndex() {
+  if (await saveIndex(SCAN_INDEX_PATH, fileCaches)) lastScan.indexSavedAt = Date.now();
 }
 
 // Every observation of (limit percentage, cumulative tokens, cumulative cost)
@@ -2402,41 +2849,139 @@ function noteHistory(usage) {
   });
 }
 
-async function getUsage() {
-  const now = Date.now();
-  if (cache && now - cacheAt < CACHE_MS) return cache;
-  if (!cache || now - cacheAt >= CACHE_MS) {
-    const disk = await loadDiskCache();
-    if (disk) {
-      cache = disk;
-      cacheAt = now;
-      noteHistory(disk);
-      return cache;
-    }
-  }
+/**
+ * What the cache did, in the terms a person cares about: how much of the work
+ * was avoided, and how much was actually read off disk.
+ */
+function cacheReport({ source, ageMs, stale, refreshing }) {
+  const s = lastScan.stats;
+  const considered = s.files || 0;
+  const reused = (s.hits || 0) + (s.sealed || 0);
+  // Databases count toward the byte figures too: a 1GB store left unread is
+  // the largest single thing the cache avoids on a quiet pass.
+  const skipped = (s.bytesSkipped || 0) + (s.dbBytesSkipped || 0);
+  const bytesTotal = (s.bytesRead || 0) + skipped;
+  return {
+    source,
+    ageMs,
+    stale: !!stale,
+    refreshing: !!refreshing,
+    ttlMs: CACHE_MS,
+    diskTtlMs: DISK_CACHE_MS,
+    indexRestored: lastScan.indexLoaded,
+    indexPath: SCAN_INDEX_PATH,
+    lastScanAt: lastScan.at || null,
+    lastScanMs: lastScan.ms || 0,
+    // Slowest first: the one worth looking at is the one at the top.
+    accounts: [...(lastScan.timings || [])].sort((a, b) => b.ms - a.ms),
+    backingOff: failureReport(),
+    files: {
+      considered,
+      sealed: s.sealed || 0,       // too old to have changed; not even stat'ed
+      hits: s.hits || 0,           // unchanged since last time
+      appended: s.appended || 0,   // grew; only the new bytes were read
+      parsed: s.parsed || 0,       // new or rewritten; read whole
+      dropped: s.dropped || 0,
+    },
+    hitRate: considered ? reused / considered : 1,
+    databases: { considered: s.dbs || 0, reused: s.dbHits || 0, scanned: s.dbScans || 0 },
+    bytes: { read: s.bytesRead || 0, skipped, total: bytesTotal },
+    byteHitRate: bytesTotal ? skipped / bytesTotal : 1,
+  };
+}
 
+/** The scan itself. Never entered twice at once - see refreshUsage(). */
+async function scanAll({ rescanFiles = false, rebuild = false } = {}) {
+  const started = Date.now();
   const accounts = await detectAccounts();
   // Sequential, not Promise.all: heavy scans (multi-GB session dirs, ccusage
   // children parsing the Codex/Claude histories) must never overlap, or their
   // page-cache and heap charges would stack into the gigabytes.
   const results = [];
+  const timings = [];
   for (const account of accounts) {
-    results.push(await getAccountUsage(account, false));
+    const t0 = Date.now();
+    const section = await getAccountUsage(account, false, { rescanFiles, rebuild });
+    // Per-account, because "the refresh is slow" is not actionable until you
+    // know which provider it is waiting on - a session scan, a SQLite read, or
+    // a rate-limit endpoint that is timing out.
+    section.scanMs = Date.now() - t0;
+    timings.push({ id: account.id, provider: account.provider, ms: section.scanMs, cached: !!section.scan });
+    results.push(section);
   }
 
-  cache = { cacheVersion: DISK_CACHE_VERSION, accounts: results, fetchedAt: new Date().toISOString() };
-  cacheAt = now;
-  saveDiskCache(cache);
-  noteHistory(cache);
-  return cache;
+  let stats = blankStats();
+  for (const r of results) if (r.scan) stats = addStats(stats, r.scan);
+  lastScan = { ...lastScan, at: Date.now(), ms: Date.now() - started, stats, timings };
+
+  const value = { cacheVersion: DISK_CACHE_VERSION, accounts: results, fetchedAt: new Date().toISOString() };
+  cache = value;
+  cacheAt = Date.now();
+  saveDiskCache(value);
+  persistScanIndex().catch(() => {});
+  noteHistory(value);
+  return value;
 }
 
+/**
+ * One scan at a time, however many readers are waiting.
+ *
+ * Without this, every request arriving after the cache expired started its own
+ * full scan: the sequential loop inside a scan stops passes overlapping with
+ * themselves, not with each other.
+ */
+function refreshUsage(opts) {
+  if (!inflight) {
+    inflight = scanAll(opts).finally(() => { inflight = null; });
+  }
+  return inflight;
+}
+
+async function getUsage({ force = false, rebuild = false } = {}) {
+  const now = Date.now();
+  // Rescan re-stats every file, seal included, and re-reads only what changed.
+  // Rebuild additionally distrusts the cache key and re-reads every byte - the
+  // only thing that can repair an entry whose (mtime, size, ino) lied.
+  if (force || rebuild) {
+    const fresh = await refreshUsage({ rescanFiles: true, rebuild });
+    return { ...fresh, cache: cacheReport({ source: 'scan', ageMs: 0 }) };
+  }
+
+  if (cache && now - cacheAt < CACHE_MS) {
+    return { ...cache, cache: cacheReport({ source: 'memory', ageMs: now - cacheAt }) };
+  }
+
+  if (!cache) {
+    const disk = await loadDiskCache();
+    if (disk) {
+      cache = disk;
+      cacheAt = Date.parse(disk.fetchedAt) || now;
+      noteHistory(disk);
+    }
+  }
+
+  const age = cache ? Date.now() - cacheAt : Infinity;
+  // Fresh enough on disk: answer, and do not scan at all.
+  if (cache && age < DISK_CACHE_MS) {
+    return { ...cache, cache: cacheReport({ source: 'disk', ageMs: age }) };
+  }
+  // Stale but usable: answer now, refresh behind it. This is the case that
+  // used to make whoever knocked first pay for the whole scan.
+  if (cache && age < STALE_MAX_MS) {
+    refreshUsage().catch((e) => console.error('cc-usage-dashboard: background refresh failed:', e.message));
+    return { ...cache, cache: cacheReport({ source: 'stale', ageMs: age, stale: true, refreshing: true }) };
+  }
+  const fresh = await refreshUsage();
+  return { ...fresh, cache: cacheReport({ source: 'scan', ageMs: 0 }) };
+}
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
 
   if (url.pathname === '/api/usage') {
     try {
-      const data = await getUsage();
+      const force = url.searchParams.get('force') === '1';
+      const rebuild = url.searchParams.get('rebuild') === '1';
+      const data = await getUsage({ force, rebuild });
       res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
       res.end(JSON.stringify(data));
     } catch (e) {
@@ -2478,6 +3023,24 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(500, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: String(e) }));
     }
+    return;
+  }
+
+  // What the cache is doing right now. Cheap enough to poll on its own, so the
+  // panel stays live without re-fetching every account's daily series with it.
+  if (url.pathname === '/api/cache') {
+    const now = Date.now();
+    const age = cache ? now - cacheAt : null;
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+    res.end(JSON.stringify({
+      ...cacheReport({
+        source: !cache ? 'empty' : age < CACHE_MS ? 'memory' : age < DISK_CACHE_MS ? 'disk' : 'stale',
+        ageMs: age,
+        stale: cache ? age >= DISK_CACHE_MS : false,
+        refreshing: !!inflight,
+      }),
+      index: fileCaches.map((c) => ({ id: c.id, files: c.entries.size })),
+    }));
     return;
   }
 
@@ -2627,6 +3190,9 @@ async function maintainOpencodeDatabases() {
 if (require.main === module) {
   server.listen(PORT, HOST, async () => {
     console.log(`cc-usage-dashboard listening on http://${HOST}:${PORT}`);
+    // Before the sampler or a browser can ask: a restored index turns the
+    // first scan from a full re-parse into a few hundred stat calls.
+    await primeScanIndex().catch(() => {});
     const state = await limitHistory.backfillState();
     const stale = !state || Date.now() - Date.parse(state.ranAt) > BACKFILL_REFRESH_MS;
     if (stale) replayCodexHistory('startup');
@@ -2643,6 +3209,15 @@ if (require.main === module) {
 module.exports = {
   detectAccounts,
   getUsage,
+  priceFolded,
+  claudeBucketCost,
+  codexBucketCost,
+  claudeSessionCache,
+  codexRolloutCache,
   maintainOpencodeDatabases,
+  scanCodexSessions,
+  scanClaudeSessions,
+  codexTurnCost,
+  formatCodexLocalRateLimits,
   server,
 };

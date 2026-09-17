@@ -536,6 +536,65 @@
     line-height: 1.5;
   }
 
+  /* ---- cache strip -------------------------------------------------- */
+  /* What the cache just did, in the terms a person cares about: how much of
+     the work was skipped, and how fresh the answer is. It sits in the footer
+     because it explains the number above it rather than being one of them. */
+  .cachebar {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    flex-wrap: wrap;
+    justify-content: center;
+    margin-top: 0.5rem;
+    padding: 0.42rem 0.7rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--surface);
+    box-shadow: var(--shadow-xs);
+    font-size: 0.7rem;
+    color: var(--ink-dim);
+  }
+  .cachebar .src {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    font-weight: 600;
+    color: var(--ink-soft);
+  }
+  .cachebar .src i {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--good); flex: none;
+  }
+  .cachebar.is-stale .src i { background: var(--warn); }
+  .cachebar.is-scan .src i { background: var(--accent-2); }
+  .cachebar.is-empty .src i { background: var(--ink-faint); }
+  .cachebar .meter {
+    width: 108px; height: 6px; border-radius: 999px;
+    background: var(--surface-3); overflow: hidden; flex: none;
+  }
+  .cachebar .meter span {
+    display: block; height: 100%; border-radius: 999px;
+    background: var(--good); transition: width 0.4s var(--ease);
+  }
+  .cachebar .seg { white-space: nowrap; }
+  .cachebar .seg b { color: var(--ink-soft); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .cachebar .sep { color: var(--border-strong); }
+  .cachebar .rescan {
+    margin-left: 0.1rem;
+    padding: 0.18rem 0.5rem;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--surface-2);
+    color: var(--ink-dim);
+    font: inherit;
+    font-size: 0.68rem;
+    cursor: pointer;
+  }
+  .cachebar .rescan:hover { color: var(--ink); border-color: var(--border-strong); }
+  .cachebar .rescan:disabled { opacity: 0.55; cursor: default; }
+
   footer {
     flex: none;
     margin-top: 0.5rem;
@@ -1123,6 +1182,7 @@
 
   <main id="panels"></main>
 
+  <div class="cachebar" id="cachebar" hidden></div>
   <footer id="footer">Local · refreshes every 30s · costs from real tokens × published rates</footer>
 </div>
 
@@ -1479,7 +1539,8 @@ document.addEventListener('mouseover', (e) => {
   if (!wrap) return;
   const idx = hit.dataset.segIndex != null ? hit.dataset.segIndex : hit.dataset.legendIndex;
   donutSync(wrap, idx);
-  wrap.querySelector('.donut-center').innerHTML = donutDetailHtml(hit);
+  const center = wrap.querySelector('.donut-center');
+  if (center) center.innerHTML = donutDetailHtml(hit);
 });
 
 document.addEventListener('mouseout', (e) => {
@@ -1696,8 +1757,10 @@ function resetsAvailableLine(resetsAvailable) {
 const LIMITLESS_PROVIDERS = new Set(['opencode', 'devin']);
 
 function limitsCard(account, rateLimits) {
-  const note = lastRefreshNoteByAccount[account.id];
-  const noteHtml = note ? `<div class="limit-stale">${note}</div>` : '';
+  // A note the user's own Refresh produced outranks one the server offered,
+  // but an empty card with no explanation is the worst of the three.
+  const note = lastRefreshNoteByAccount[account.id] || rateLimits?.note || '';
+  const noteHtml = note ? `<div class="limit-stale">${esc(note)}</div>` : '';
   const labels = account.limitLabels || {};
   const sessionLabel = rateLimits?.session?.label || labels.session || 'Session (5h)';
   const weeklyLabel = rateLimits?.weekly?.label || labels.weekly || 'Weekly';
@@ -1718,6 +1781,11 @@ function limitsCard(account, rateLimits) {
     return `
       <div class="limits-head"><h2 class="card-title">${heading}</h2></div>
       <p class="empty">No subscription limits to show — usage is read locally from the ${providerName(account.provider)} database.</p>${noteHtml}${freshness}`;
+  }
+  if (rateLimits?.error) {
+    return `
+      <div class="limits-head"><h2 class="card-title">${heading}</h2>${refreshButton(account.id)}</div>
+      <p class="empty">Couldn't fetch live limits: ${esc(rateLimits.error)}</p>${noteHtml}`;
   }
   if (!rateLimits || !hasWindows) {
     return `
@@ -2183,6 +2251,88 @@ function ensureLayout(allAccounts, visibleAccounts) {
     `<div class="panel${activeId === 'settings' ? ' active' : ''}" id="panel-settings">${settingsPanelHtml(allAccounts)}</div>`;
 }
 
+// ---- cache strip ------------------------------------------------------
+// Three questions, answered in one line: is this answer fresh, how much of
+// the scan did the cache skip, and how much did it actually read off disk.
+
+const SOURCE_TEXT = {
+  memory: 'from memory',
+  disk: 'from disk',
+  stale: 'stale — refreshing',
+  scan: 'freshly scanned',
+  empty: 'no cache yet',
+};
+
+function fmtBytes(n) {
+  if (!n) return '0 B';
+  const u = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const i = Math.min(u.length - 1, Math.floor(Math.log(n) / Math.log(1024)));
+  return (n / Math.pow(1024, i)).toFixed(i ? 1 : 0) + ' ' + u[i];
+}
+
+function fmtAge(ms) {
+  if (ms == null || !isFinite(ms)) return '—';
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 60) return s + 's ago';
+  const m = Math.round(s / 60);
+  return m < 60 ? m + 'm ago' : Math.round(m / 60) + 'h ago';
+}
+
+function renderCache(c) {
+  const bar = document.getElementById('cachebar');
+  if (!bar || !c) return;
+  const f = c.files || {};
+  const db = c.databases || { considered: 0, reused: 0, scanned: 0 };
+  const reused = (f.sealed || 0) + (f.hits || 0);
+  const held = c.backingOff || [];
+  const slowest = (c.accounts || [])[0];
+
+  // This used to spell out the whole scan. It earned that space while the
+  // scanning was being fixed; at a steady 100% it is noise beside the prompt
+  // cache card, which is the cache a person actually pays for. So: how long
+  // the last scan took, anything still backing off, and the escape hatch.
+  // The full breakdown moves into the tooltip.
+  bar.hidden = false;
+  bar.className = 'cachebar' + (c.stale ? ' is-stale' : c.source === 'scan' ? ' is-scan' : c.source === 'empty' ? ' is-empty' : '');
+  bar.title =
+    `${SOURCE_TEXT[c.source] || c.source}, ${fmtAge(c.ageMs)}` +
+    (f.considered
+      ? `\n\nfiles: ${f.sealed || 0} sealed, ${f.hits || 0} unchanged, ${f.appended || 0} appended, ${f.parsed || 0} re-parsed of ${f.considered}` +
+        `\nread ${fmtBytes(c.bytes?.read)} of ${fmtBytes(c.bytes?.total)} (${Math.round((c.byteHitRate ?? 0) * 100)}% skipped)`
+      : '\n\nno scan yet this session') +
+    (db.considered ? `\ndatabases: ${db.reused} unchanged, ${db.scanned} re-scanned` : '') +
+    (c.indexRestored ? '\nfile index restored from disk at startup' : '') +
+    ((c.accounts || []).length ? '\n\nper account:\n' + c.accounts.map(a => `  ${a.ms}ms  ${a.id}`).join('\n') : '') +
+    (held.length ? '\n\nbacking off:\n' + held.map(h => `  ${h.key} - ${h.failures} failures, retry in ${Math.round(h.retryInMs / 1000)}s`).join('\n') : '');
+
+  const scanned = f.considered
+    ? `scan <b>${(c.lastScanMs || 0).toLocaleString()}ms</b>${slowest ? ` (${esc(slowest.provider)} ${slowest.ms.toLocaleString()}ms)` : ''}`
+    : 'no scan yet';
+  bar.innerHTML =
+    `<span class="src"><i></i>${scanned}</span>` +
+    (f.considered ? `<span class="seg">${(reused + db.reused).toLocaleString()} of ${(f.considered + db.considered).toLocaleString()} reused</span>` : '') +
+    (held.length ? `<span class="seg" style="color:var(--warn)">${held.length} backing off</span>` : '') +
+    `<button class="rescan" id="rescan"${c.refreshing ? ' disabled' : ''} title="Re-check every file, seal included. Hold Shift to re-read every byte.">${c.refreshing ? 'refreshing…' : 'Rescan'}</button>`;
+}
+
+// A full rescan ignores every tier, including the seal - the escape hatch for
+// "I do not believe these numbers".
+document.addEventListener('click', async (e) => {
+  const btn = e.target.closest('#rescan');
+  if (!btn) return;
+  // Plain click re-checks every file and re-reads only what changed. Shift is
+  // the heavier one: distrust the cache key and re-read every byte.
+  const deep = e.shiftKey;
+  btn.disabled = true;
+  btn.textContent = deep ? 'rebuilding…' : 'rescanning…';
+  try {
+    const res = await fetch(deep ? '/api/usage?rebuild=1' : '/api/usage?force=1');
+    render(await res.json());
+  } catch {
+    btn.textContent = 'failed';
+  }
+});
+
 let lastFetchedAt = null;
 
 async function load() {
@@ -2194,6 +2344,7 @@ async function load() {
 function render(data) {
   lastFetchedAt = data.fetchedAt;
   document.getElementById('updated').textContent = 'updated ' + new Date(data.fetchedAt).toLocaleTimeString();
+  renderCache(data.cache);
 
   if (!data.accounts || !data.accounts.length) {
     document.getElementById('tabs').innerHTML = '';
