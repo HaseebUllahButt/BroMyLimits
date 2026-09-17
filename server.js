@@ -1,4 +1,5 @@
 const http = require('node:http');
+const https = require('node:https');
 const { exec, execFile } = require('node:child_process');
 const { readFile, readdir, stat, writeFile } = require('node:fs/promises');
 const { existsSync, createReadStream } = require('node:fs');
@@ -341,16 +342,189 @@ function failureReport() {
   });
 }
 
+// --- Antigravity, asked locally ----------------------------------------------
+//
+// Antigravity's IDE runs a language server on loopback and already knows the
+// answer: it holds the signed-in user's plan and the remaining fraction of
+// every model's quota, because that is what it draws in its own UI. Asking it
+// is a request to 127.0.0.1 against the user's own running process - no Google
+// endpoint, no OAuth refresh, no embedded client credentials, and nothing
+// leaves the machine.
+//
+// The server authenticates callers with a CSRF token it puts on its own
+// command line, and listens on an ephemeral port with a self-signed
+// certificate. So: find the process, take the token, try its listening ports.
+//
+// This is the same route the Antigravity quota extensions use. When the IDE is
+// not running there is nothing to ask, and the caller falls back to whatever
+// was last known.
+
+const AG_SERVER_NAMES = {
+  'linux:x64': 'language_server_linux_x64',
+  'linux:arm64': 'language_server_linux_arm',
+  'darwin:arm64': 'language_server_macos_arm',
+  'darwin:x64': 'language_server_macos',
+};
+
+const AG_LOCAL_TTL_MS = 60_000;
+let agLocal = { at: 0, value: null };
+
+function execOut(cmd, args, timeout = 2500) {
+  return new Promise((resolve) => {
+    try {
+      execFile(cmd, args, { timeout, maxBuffer: 1 << 20 }, (err, stdout) => resolve(err && !stdout ? '' : String(stdout || '')));
+    } catch { resolve(''); }
+  });
+}
+
+/** The language server's pid and CSRF token, or null when the IDE is not up. */
+async function antigravityServerProcess() {
+  if (process.platform === 'win32') return null; // no pgrep; not worth shelling wmic
+  const name = AG_SERVER_NAMES[`${process.platform}:${process.arch}`];
+  if (!name) return null;
+  const out = await execOut('pgrep', ['-fa', name]);
+  for (const line of out.split('\n')) {
+    if (!line.trim() || !line.includes(name)) continue;
+    const pid = Number(line.trim().split(/\s+/)[0]);
+    const csrf = /--csrf_token[= ]+([A-Za-z0-9._-]+)/.exec(line)?.[1];
+    if (pid && csrf) return { pid, csrf };
+  }
+  return null;
+}
+
+/** Ports that pid is listening on, newest tooling first. */
+async function listeningPorts(pid) {
+  const ports = new Set();
+  const take = (text) => {
+    for (const m of text.matchAll(/:(\d{2,5})\b/g)) {
+      const n = Number(m[1]);
+      if (n > 1024) ports.add(n);
+    }
+  };
+  const ss = await execOut('ss', ['-tlnp']);
+  for (const line of ss.split('\n')) if (line.includes(`pid=${pid},`)) take(line);
+  if (!ports.size) {
+    const lsof = await execOut('lsof', ['-nP', '-a', '-iTCP', '-sTCP:LISTEN', '-p', String(pid)]);
+    for (const line of lsof.split('\n')) if (line.includes('LISTEN')) take(line);
+  }
+  return [...ports];
+}
+
+/** One Connect-protocol POST to the local server. Self-signed cert by design. */
+function postLocalLanguageServer(port, csrf, method, body) {
+  return new Promise((resolve) => {
+    const payload = JSON.stringify(body);
+    const req = https.request({
+      host: '127.0.0.1',
+      port,
+      path: `/exa.language_server_pb.LanguageServerService/${method}`,
+      method: 'POST',
+      rejectUnauthorized: false, // loopback, the IDE's own self-signed cert
+      timeout: 4000,
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Codeium-Csrf-Token': csrf,
+        'Connect-Protocol-Version': '1',
+        'Content-Length': Buffer.byteLength(payload),
+      },
+    }, (res) => {
+      let data = '';
+      res.setEncoding('utf8');
+      res.on('data', (c) => { data += c; });
+      res.on('end', () => {
+        try { resolve(JSON.parse(data)); } catch { resolve(null); }
+      });
+    });
+    req.on('error', () => resolve(null));
+    req.on('timeout', () => { req.destroy(); resolve(null); });
+    req.end(payload);
+  });
+}
+
+/** GetUserStatus, shaped like every other provider's rate-limit block. */
+function parseAntigravityLocalStatus(data) {
+  const userStatus = data?.userStatus;
+  if (!userStatus) return null;
+  const configs = userStatus.cascadeModelConfigData?.clientModelConfigs || [];
+  const windows = [];
+  for (const model of configs) {
+    const quota = model?.quotaInfo;
+    if (!quota) continue;
+    const label = String(model.label || 'Model');
+    // No remainingFraction but a resetTime means the bucket is spent; neither
+    // means the model is not metered at all, which is not a window to draw.
+    if (typeof quota.remainingFraction !== 'number') {
+      if (!quota.resetTime) continue;
+      windows.push({ label, percent: 100, remainingPercent: 0, resetsAt: quota.resetTime });
+      continue;
+    }
+    const remaining = Math.max(0, Math.min(1, quota.remainingFraction));
+    windows.push({
+      label,
+      percent: Math.round((1 - remaining) * 100),
+      remainingPercent: Math.round(remaining * 100),
+      resetsAt: quota.resetTime || null,
+    });
+  }
+  if (!windows.length) return null;
+  return {
+    fetchedAtMs: Date.now(),
+    ageMinutes: 0,
+    live: true,
+    source: 'antigravity-language-server',
+    windows,
+    planLabel: userStatus.planStatus?.planInfo?.planName || null,
+  };
+}
+
+async function getAntigravityLocalRateLimits() {
+  const now = Date.now();
+  if (agLocal.value && now - agLocal.at < AG_LOCAL_TTL_MS) {
+    return { ...agLocal.value, ageMinutes: Math.round((now - agLocal.at) / 60000) };
+  }
+  const proc = await antigravityServerProcess();
+  if (!proc) return null;
+  for (const port of await listeningPorts(proc.pid)) {
+    const data = await postLocalLanguageServer(port, proc.csrf, 'GetUserStatus', {
+      metadata: { ideName: 'antigravity', extensionName: 'antigravity', locale: 'en' },
+    });
+    const parsed = parseAntigravityLocalStatus(data);
+    if (parsed) {
+      agLocal = { at: now, value: parsed };
+      return parsed;
+    }
+  }
+  return null;
+}
+
 async function getAntigravityRateLimits(account, force = false) {
   const now = Date.now();
+
+  // The local language server first, always. It is the same data, it is on
+  // loopback, and it costs no request to anyone's servers - so a background
+  // pass never reaches for the network at all.
+  const local = await getAntigravityLocalRateLimits();
+  if (local) {
+    antigravityLimits.set(account.id, { value: local, at: now });
+    clearFailure(`antigravity:${account.id}`);
+    return local;
+  }
+
   const cached = antigravityLimits.get(account.id);
-  if (!force && cached && now - cached.at < ANTIGRAVITY_LIVE_REFRESH_MS) {
-    return { ...cached.value, ageMinutes: Math.round((now - cached.at) / 60000) };
+  // Nothing local to read: serve what was last known and stop there. The
+  // remote call is reserved for an explicit Refresh.
+  if (!force) {
+    if (cached) return { ...cached.value, ageMinutes: Math.round((now - cached.at) / 60000), live: false };
+    // Say why there is nothing rather than drawing an empty card. The IDE
+    // holds these numbers; when it is closed nobody local knows them.
+    return {
+      fetchedAtMs: now,
+      live: false,
+      source: 'antigravity-language-server',
+      windows: [],
+      note: 'Antigravity is not running - open the IDE, or press Refresh to ask upstream.',
+    };
   }
-  if (!force && now - (lastAntigravityLiveAttemptAt.get(account.id) || 0) < ANTIGRAVITY_LIVE_REFRESH_MS) {
-    return cached ? cached.value : null;
-  }
-  // An account that keeps refusing is not worth a timeout every pass.
   const failKey = `antigravity:${account.id}`;
   if (!force && failureHold(failKey)) {
     return cached ? cached.value : { error: failureState.get(failKey)?.message, backingOff: true };
@@ -615,13 +789,15 @@ async function fetchLiveCodexRateLimits(accessToken, chatgptAccountId) {
 async function getCodexRateLimits(account, force = false) {
   const now = Date.now();
   const cached = liveCodexLimits.get(account.id);
+  // Codex writes its own rate limits into every rollout transcript - the same
+  // percentages, windows, reset times, credit balance and plan the endpoint
+  // returns, at finer resolution than we could ever poll for. A background
+  // pass reads those (scanCodexSessions -> formatCodexLocalRateLimits) and
+  // never touches the network; Refresh is what asks upstream.
   if (!force) {
-    if (cached && now - cached.at < LIMITS_REFRESH_BACKOFF_MS) {
-      return { ...cached.value, ageMinutes: Math.round((now - cached.at) / 60000) };
-    }
-    if (now - (lastCodexLiveAttemptAt.get(account.id) || 0) < LIMITS_REFRESH_BACKOFF_MS) {
-      return cached ? cached.value : null;
-    }
+    return cached
+      ? { ...cached.value, ageMinutes: Math.round((now - cached.at) / 60000), live: false }
+      : null;
   }
   lastCodexLiveAttemptAt.set(account.id, now);
   try {
@@ -1094,13 +1270,16 @@ async function getGrokRateLimits(account, force = false) {
   const now = Date.now();
   const cached = liveGrokLimits.get(account.id);
 
-  // Serve a complete in-memory cache (has monthly) within the backoff window.
-  // Incomplete caches (weekly-only from CLI log) must not block a live retry.
-  if (!force && cached && grokLimitsComplete(cached.value) && now - cached.at < GROK_LIVE_REFRESH_MS) {
-    return { ...cached.value, ageMinutes: Math.round((now - cached.at) / 60000) };
-  }
-  if (!force && cached && now - (lastGrokLiveAttemptAt.get(account.id) || 0) < GROK_LIVE_REFRESH_MS) {
-    return { ...cached.value, ageMinutes: Math.round((now - (cached.value.fetchedAtMs || now)) / 60000) };
+  // Background passes read what the CLI already wrote: its own log, and the
+  // snapshot this dashboard keeps beside it. Neither is a request to xAI.
+  if (!force) {
+    const fromLog = await getGrokLimitsFromCliLog(account.configDir).catch(() => null);
+    const snapshot = await readGrokLimitsSnapshot(account.id).catch(() => null);
+    const best = mergeGrokLimits(
+      grokLimitsComplete(cached?.value) ? cached.value : null,
+      mergeGrokLimits(snapshot, fromLog),
+    ) || cached?.value || snapshot || fromLog || null;
+    return best ? { ...best, live: false } : null;
   }
 
   lastGrokLiveAttemptAt.set(account.id, now);
@@ -3209,6 +3388,8 @@ if (require.main === module) {
 module.exports = {
   detectAccounts,
   getUsage,
+  parseAntigravityLocalStatus,
+  postLocalLanguageServer,
   priceFolded,
   claudeBucketCost,
   codexBucketCost,
