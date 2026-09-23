@@ -1230,6 +1230,8 @@
   }
   .pace-note { color: var(--ink-faint); }
   .pace-note.over { color: var(--warn); }
+  td.zero { color: var(--ink-faint); font-family: var(--mono); }
+
 </style>
 </head>
 <body>
@@ -1762,6 +1764,7 @@ function statRow(section) {
 }
 
 function cell(cost, tokens) {
+  if (!cost && !tokens) return '<td class="zero">—</td>';
   return `<td>${fmt$4(cost)}<span class="tok-sub">${fmtTok(tokens)} tok</span></td>`;
 }
 
