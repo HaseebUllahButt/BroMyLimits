@@ -749,7 +749,11 @@ async function analyze({ maxStepsPerWindow = 400 } = {}) {
             projectedCostAt100: (recentPool.reduce((s, c) => s + c.cost, 0) / recentPct) * 100,
           }
           : null,
-        cycles: cycles.map(({ steps: _drop, ...rest }) => rest),
+        // Only rated cycles are ever charted or pooled; windows that never
+        // moved (Antigravity logs hundreds) would otherwise bloat the payload.
+        cycles: cycles
+          .filter((c) => c.tokensPerPct != null || c.cycle === latest.cycle)
+          .map(({ steps: _drop, ...rest }) => rest),
         steps,
       });
     }
