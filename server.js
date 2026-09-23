@@ -706,6 +706,14 @@ async function getClaudeRateLimits(account, force = false) {
 // conservative with the account token.
 const liveCodexLimits = new Map(); // accountId -> {value, at}
 const lastCodexLiveAttemptAt = new Map();
+const CODEX_WEEKLY_RESET_HORIZON_MS = 8 * 24 * 60 * 60_000;
+
+function codexResetBeyondWeeklyHorizon(resetAt, observedAtMs = Date.now()) {
+  let resetMs = Number(resetAt);
+  if (!Number.isFinite(resetMs) || resetMs <= 0) return false;
+  if (resetMs < 1e12) resetMs *= 1000;
+  return resetMs - observedAtMs > CODEX_WEEKLY_RESET_HORIZON_MS;
+}
 
 async function fetchLiveCodexRateLimits(accessToken, chatgptAccountId) {
   const headers = {
@@ -719,6 +727,7 @@ async function fetchLiveCodexRateLimits(accessToken, chatgptAccountId) {
   ]);
   if (!res.ok) throw new Error(`usage endpoint ${res.status}`);
   const u = await res.json();
+  const fetchedAtMs = Date.now();
 
   // The usage endpoint exposes the count, while this endpoint exposes each
   // reset credit's expiry. Keep the usage response usable if the latter is
@@ -761,22 +770,26 @@ async function fetchLiveCodexRateLimits(accessToken, chatgptAccountId) {
   const windows = [u.rate_limit?.primary_window, u.rate_limit?.secondary_window].filter(Boolean);
   let weekly = null;
   let session = null;
+  const missingDuration = [];
   for (const w of windows) {
     const secs = Number(w.limit_window_seconds) || Number(w.window_minutes) * 60 || 0;
     const entry = toEntry(w);
-    if (secs >= 604800 - 3600) weekly = entry;
-    else if (secs >= 300 * 60 - 60) session = entry;
-    else {
-      // Fallback for old payloads that lack duration: treat first as weekly
-      if (!weekly) weekly = entry;
-      else if (!session) session = entry;
-    }
+    const key = limitHistory.classifyCodexWindow(Math.round(secs / 60)).key;
+    if (key === 'weekly') weekly = entry;
+    else if (key === 'session') session = entry;
+    else if (!secs && !codexResetBeyondWeeklyHorizon(w.reset_at, fetchedAtMs)) missingDuration.push(entry);
   }
   // Extremely old payloads only sent primary_window (weekly) — keep that
   // assignment when no duration is present and only one window exists.
-  if (!weekly && !session && windows.length === 1) weekly = toEntry(windows[0]);
+  if (!weekly && !session) {
+    if (windows.length === 1 && missingDuration.length === 1) weekly = missingDuration[0];
+    else if (windows.length > 1 && missingDuration.length === windows.length) {
+      weekly = missingDuration[0];
+      session = missingDuration[1] || null;
+    }
+  }
   return {
-    fetchedAtMs: Date.now(),
+    fetchedAtMs,
     ageMinutes: 0,
     live: true,
     weekly,
@@ -1359,6 +1372,7 @@ const CLAUDE_PRICING = {
   'claude-fable-5': { input: 10, output: 50, cacheWrite: 12.5, cacheRead: 1 },
   'claude-fable-5-1': { input: 10, output: 50, cacheWrite: 12.5, cacheRead: 1 },
   'claude-mythos-5': { input: 10, output: 50, cacheWrite: 12.5, cacheRead: 1 },
+  'claude-opus-5-5': { input: 4, output: 20, cacheWrite: 5, cacheRead: 0.2 },
   'claude-opus-5': { input: 5, output: 25, cacheWrite: 6.25, cacheRead: 0.5 },
   'claude-opus-4-8': { input: 5, output: 25, cacheWrite: 6.25, cacheRead: 0.5 },
   'claude-opus-4-7': { input: 5, output: 25, cacheWrite: 6.25, cacheRead: 0.5 },
@@ -1569,13 +1583,15 @@ function claudeDailyRecomputed(daily) {
 
 // Codex's daily/session JSON gives real per-model token counts but no
 // per-model cost, and litellm/ccusage has no entries for these model names
-// at all. Real tokens x real published OpenAI rate card
-// (developers.openai.com/api/docs/pricing, checked 2026-07-31) = real cost.
-// 2026-07-30: OpenAI cut Luna 80% and Terra 20% (Sol unchanged).
+// at all. Real tokens x published OpenAI rates = API-equivalent value, not a
+// Codex subscription charge. Rates below include the 2026-07-30 Luna/Terra
+// cuts and Sol's promotional cut from 2026-08-21.
 const CODEX_PRICING = {
   // input / cachedInput / output, $ per million tokens (standard, short context)
   'gpt-6-astra': { input: 10, cachedInput: 1, output: 50 },
-  'gpt-5.6-sol': { input: 5, cachedInput: 0.5, output: 30 },
+  'gpt-6-sol': { input: 2, cachedInput: 0.2, output: 10 },
+  'gpt-6-luna': { input: 0.1, cachedInput: 0.01, output: 0.5 },
+  'gpt-5.6-sol': { input: 4, cachedInput: 0.4, output: 20 },
   'gpt-5.6-terra': { input: 2, cachedInput: 0.2, output: 12 },
   'gpt-5.6-luna': { input: 0.2, cachedInput: 0.02, output: 1.2 },
   'gpt-5.5': { input: 5, cachedInput: 0.5, output: 30 },
@@ -1587,16 +1603,29 @@ const CODEX_PRICING = {
 };
 
 const CODEX_CUTOVER_MS = Date.parse('2026-07-30T00:00:00Z');
+const CODEX_SOL_PROMO_START_MS = Date.parse('2026-08-21T00:00:00Z');
 const CODEX_PRICING_PRE_CUT = {
   'gpt-5.6-luna': { input: 1.0, cachedInput: 0.1, output: 6 },
   'gpt-5.6-terra': { input: 2.5, cachedInput: 0.25, output: 15 },
 };
+const CODEX_PRICING_PRE_SOL_PROMO = {
+  'gpt-5.6-sol': { input: 5, cachedInput: 0.5, output: 30 },
+};
 
-function codexTurnCost(modelName, u, timestamp) {
+function codexRatesForModel(modelName, timestamp) {
   const key = String(modelName || '').replace(/-\d{4}-\d{2}-\d{2}$/, '');
   const ms = timestamp ? Date.parse(timestamp) : NaN;
-  const usePreCut = Number.isFinite(ms) && ms < CODEX_CUTOVER_MS && CODEX_PRICING_PRE_CUT[key];
-  const rates = usePreCut ? CODEX_PRICING_PRE_CUT[key] : CODEX_PRICING[key];
+  if (Number.isFinite(ms) && ms < CODEX_CUTOVER_MS && CODEX_PRICING_PRE_CUT[key]) {
+    return CODEX_PRICING_PRE_CUT[key];
+  }
+  if (Number.isFinite(ms) && ms < CODEX_SOL_PROMO_START_MS && CODEX_PRICING_PRE_SOL_PROMO[key]) {
+    return CODEX_PRICING_PRE_SOL_PROMO[key];
+  }
+  return CODEX_PRICING[key];
+}
+
+function codexTurnCost(modelName, u, timestamp) {
+  const rates = codexRatesForModel(modelName, timestamp);
   if (!rates) return null;
   const cached = Number(u.cached_input_tokens ?? u.cacheReadTokens) || 0;
   const rawInput = Number(u.input_tokens ?? u.inputTokens) || 0;
@@ -1942,6 +1971,7 @@ function mergeCodexModels(nativeModels, piModels) {
 
 function formatCodexLocalRateLimits(limits, timestampMs) {
   if (!limits) return null;
+  const observedAtMs = timestampMs || Date.now();
   const toEntry = (w) => (w && typeof w.used_percent === 'number'
     ? {
         percent: w.used_percent,
@@ -1951,14 +1981,20 @@ function formatCodexLocalRateLimits(limits, timestampMs) {
   const windows = [limits.primary, limits.secondary].filter(Boolean);
   let weekly = null;
   let session = null;
+  const missingDuration = [];
   for (const w of windows) {
     const mins = Number(w.window_minutes) || (Number(w.limit_window_seconds) ? Math.round(w.limit_window_seconds / 60) : 0);
     const entry = toEntry(w);
-    if (mins >= 10080 - 60) weekly = entry;
-    else if (mins >= 300 - 30) session = entry;
-    else {
-      if (!weekly) weekly = entry;
-      else if (!session) session = entry;
+    const key = limitHistory.classifyCodexWindow(mins).key;
+    if (key === 'weekly') weekly = entry;
+    else if (key === 'session') session = entry;
+    else if (!mins && !codexResetBeyondWeeklyHorizon(w.resets_at, observedAtMs)) missingDuration.push(entry);
+  }
+  if (!weekly && !session) {
+    if (windows.length === 1 && missingDuration.length === 1) weekly = missingDuration[0];
+    else if (windows.length > 1 && missingDuration.length === windows.length) {
+      weekly = missingDuration[0];
+      session = missingDuration[1] || null;
     }
   }
   const credits = limits.credits?.has_credits
@@ -2038,11 +2074,7 @@ async function scanCodexSessionFiles(sessionsDir) {
 // The bucket already holds fresh input separately from cached, so this prices
 // it directly rather than going through codexTurnCost's raw-minus-cached step.
 function codexBucketCost(model, t, date) {
-  const key = String(model || '').replace(/-\d{4}-\d{2}-\d{2}$/, '');
-  const ms = date ? Date.parse(date) : NaN;
-  const rates = (Number.isFinite(ms) && ms < CODEX_CUTOVER_MS && CODEX_PRICING_PRE_CUT[key])
-    ? CODEX_PRICING_PRE_CUT[key]
-    : CODEX_PRICING[key];
+  const rates = codexRatesForModel(model, date);
   if (!rates) return null;
   const input = (t.input * rates.input) / 1e6;
   const cacheRead = (t.cacheRead * rates.cachedInput) / 1e6;
@@ -3478,6 +3510,7 @@ module.exports = {
   postLocalLanguageServer,
   priceFolded,
   claudeBucketCost,
+  claudeModelCost,
   codexBucketCost,
   claudeSessionCache,
   codexRolloutCache,

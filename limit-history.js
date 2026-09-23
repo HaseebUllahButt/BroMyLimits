@@ -50,6 +50,25 @@ function cycleIdFor(resetsAt) {
   return new Date(Math.round(ms / CYCLE_BUCKET_MS) * CYCLE_BUCKET_MS).toISOString();
 }
 
+// Codex currently reports 5h and 7d limits. Keep other observed durations in
+// their own lane instead of folding every window longer than a week into the
+// weekly history (a 30d reading appeared briefly in local rollout data).
+function classifyCodexWindow(minutes) {
+  const value = Math.round(Number(minutes) || 0);
+  if (value && Math.abs(value - 300) <= 30) return { key: 'session', label: 'Session (5h)' };
+  if (value && Math.abs(value - 10080) <= 60) return { key: 'weekly', label: 'Weekly' };
+  if (!value) return { key: 'unknown', label: 'Limit' };
+  if (value % 1440 === 0) {
+    const days = value / 1440;
+    return { key: `${days}d`, label: `${days}d` };
+  }
+  if (value % 60 === 0) {
+    const hours = value / 60;
+    return { key: `${hours}h`, label: `${hours}h` };
+  }
+  return { key: `${value}m`, label: `${value}m` };
+}
+
 // Flattens each provider's differently-shaped rateLimits object into a single
 // list of {key, label, percent, resetsAt}. Providers that expose a `windows`
 // array (Grok, Antigravity) already enumerate every bucket; the others carry
@@ -102,6 +121,10 @@ function materiallyDifferent(prev, next) {
   // grow the file by megabytes a week for no extra resolution.
   if (prev.pct !== next.pct) return true;
   if (prev.cycle !== next.cycle) return true;
+  // A pricing schedule change can lower the recomputed cumulative dollar
+  // total; save that new baseline so analysis can split the counter epoch.
+  if ((Number.isFinite(prev.tok) && Number.isFinite(next.tok) && next.tok < prev.tok)
+    || (Number.isFinite(prev.cost) && Number.isFinite(next.cost) && next.cost < prev.cost - 1e-6)) return true;
   // A changed login mid-window is exactly the event worth having on record.
   if (prev.who !== next.who) return true;
   // A heartbeat keeps long idle stretches visible as flat time rather than as
@@ -184,6 +207,27 @@ async function allRows() {
   return [...back, ...live];
 }
 
+function removeMisclassifiedLiveCodexRows(rows) {
+  // Older live snapshots stored no duration and briefly labeled a 30d Codex
+  // lane as weekly. Backfill can identify a matching other-duration cycle;
+  // otherwise, a reset more than eight days after the sample is itself enough
+  // to prove that the row cannot be one of Codex's seven-day windows.
+  const otherCodexCycles = new Set(rows
+    .filter((row) => row.provider === 'codex' && row.src === 'backfill'
+      && row.win !== 'weekly' && row.win !== 'session')
+    .map((row) => `${row.acct}|${row.cycle}`));
+  return rows.filter((row) => {
+    if (row.provider !== 'codex' || row.win !== 'weekly') return true;
+    const sampledAt = Date.parse(row.t);
+    const resetsAt = Date.parse(row.resetsAt);
+    const resetTooFar = Number.isFinite(sampledAt) && Number.isFinite(resetsAt)
+      && resetsAt - sampledAt > 8 * 24 * 60 * 60_000;
+    const sameCycleOtherLane = row.src === 'live'
+      && otherCodexCycles.has(`${row.acct}|${row.cycle}`);
+    return !(resetTooFar || sameCycleOtherLane);
+  });
+}
+
 // --- Codex backfill ----------------------------------------------------------
 //
 // Codex writes a `token_count` event after every model turn carrying both the
@@ -193,7 +237,10 @@ async function allRows() {
 // all files and sorted globally before the cumulative counters are built.
 
 const CODEX_PRICING = {
-  'gpt-5.6-sol': { input: 5, cachedInput: 0.5, output: 30 },
+  'gpt-6-astra': { input: 10, cachedInput: 1, output: 50 },
+  'gpt-6-sol': { input: 2, cachedInput: 0.2, output: 10 },
+  'gpt-6-luna': { input: 0.1, cachedInput: 0.01, output: 0.5 },
+  'gpt-5.6-sol': { input: 4, cachedInput: 0.4, output: 20 },
   'gpt-5.6-terra': { input: 2, cachedInput: 0.2, output: 12 },
   'gpt-5.6-luna': { input: 0.2, cachedInput: 0.02, output: 1.2 },
   'gpt-5.5': { input: 5, cachedInput: 0.5, output: 30 },
@@ -204,8 +251,30 @@ const CODEX_PRICING = {
   'gpt-5.4-pro': { input: 30, cachedInput: 30, output: 180 },
 };
 
-function codexTurnCost(modelName, usage) {
-  const rates = CODEX_PRICING[String(modelName || '').replace(/-\d{4}-\d{2}-\d{2}$/, '')];
+const CODEX_CUTOVER_MS = Date.parse('2026-07-30T00:00:00Z');
+const CODEX_SOL_PROMO_START_MS = Date.parse('2026-08-21T00:00:00Z');
+const CODEX_PRICING_PRE_CUT = {
+  'gpt-5.6-luna': { input: 1, cachedInput: 0.1, output: 6 },
+  'gpt-5.6-terra': { input: 2.5, cachedInput: 0.25, output: 15 },
+};
+const CODEX_PRICING_PRE_SOL_PROMO = {
+  'gpt-5.6-sol': { input: 5, cachedInput: 0.5, output: 30 },
+};
+
+function codexRatesForModel(modelName, timestamp) {
+  const key = String(modelName || '').replace(/-\d{4}-\d{2}-\d{2}$/, '');
+  const ms = timestamp ? Date.parse(timestamp) : NaN;
+  if (Number.isFinite(ms) && ms < CODEX_CUTOVER_MS && CODEX_PRICING_PRE_CUT[key]) {
+    return CODEX_PRICING_PRE_CUT[key];
+  }
+  if (Number.isFinite(ms) && ms < CODEX_SOL_PROMO_START_MS && CODEX_PRICING_PRE_SOL_PROMO[key]) {
+    return CODEX_PRICING_PRE_SOL_PROMO[key];
+  }
+  return CODEX_PRICING[key];
+}
+
+function codexTurnCost(modelName, usage, timestamp) {
+  const rates = codexRatesForModel(modelName, timestamp);
   if (!rates) return 0;
   const cached = usage.cached_input_tokens || 0;
   const fresh = Math.max(0, (usage.input_tokens || 0) - cached);
@@ -264,7 +333,7 @@ async function scanCodexRollout(filePath) {
       t: d.timestamp || null,
       model,
       tokens: usage.total_tokens || 0,
-      cost: codexTurnCost(model, usage),
+      cost: codexTurnCost(model, usage, d.timestamp),
       primary: limits.primary || null,
       secondary: limits.secondary || null,
     });
@@ -273,10 +342,7 @@ async function scanCodexRollout(filePath) {
 }
 
 function windowLabelFor(minutes) {
-  if (!minutes) return 'Limit';
-  if (minutes >= 10080) return 'Weekly';
-  if (minutes >= 1440) return `${Math.round(minutes / 1440)}d`;
-  return `${Math.round(minutes / 60)}h`;
+  return classifyCodexWindow(minutes).label;
 }
 
 /**
@@ -304,23 +370,23 @@ async function backfillCodex({ sessionsDir, accountId = 'codex-default' } = {}) 
     tok += e.tokens;
     cost += e.cost;
     if (!e.t) continue;
-    // Classify strictly by window duration, not by primary/secondary
-    // position — Codex has swapped which lane is primary vs secondary.
-    // 300 min = 5h session, 10080 min = weekly.
-    const classifyKey = (minutes) => (Number(minutes) >= 10080 ? 'weekly' : 'session');
+    // Classify by duration, not primary/secondary position — those lanes can
+    // swap. Unknown durations get separate keys so they cannot pollute 5h/7d.
     const windows = [];
     if (e.primary && typeof e.primary.used_percent === 'number') {
+      const classified = classifyCodexWindow(e.primary.window_minutes);
       windows.push({
-        key: classifyKey(e.primary.window_minutes),
-        label: windowLabelFor(e.primary.window_minutes),
+        key: classified.key,
+        label: classified.label,
         pct: e.primary.used_percent,
         resetsAt: e.primary.resets_at ? new Date(e.primary.resets_at * 1000).toISOString() : null,
       });
     }
     if (e.secondary && typeof e.secondary.used_percent === 'number') {
+      const classified = classifyCodexWindow(e.secondary.window_minutes);
       windows.push({
-        key: classifyKey(e.secondary.window_minutes),
-        label: windowLabelFor(e.secondary.window_minutes),
+        key: classified.key,
+        label: classified.label,
         pct: e.secondary.used_percent,
         resetsAt: e.secondary.resets_at ? new Date(e.secondary.resets_at * 1000).toISOString() : null,
       });
@@ -463,6 +529,29 @@ function summarizeSeries(series) {
   };
 }
 
+// A price-table update or account counter reset can make a cumulative counter
+// move backwards. Never take a slope across that discontinuity; use only the
+// newest continuous segment and let the rollout backfill cover earlier turns.
+function splitCounterResetSegments(series) {
+  const segments = [];
+  let current = [];
+  let previous = null;
+  for (const row of series) {
+    const tokenReset = previous && Number.isFinite(row.tok) && Number.isFinite(previous.tok)
+      && row.tok < previous.tok;
+    const costReset = previous && Number.isFinite(row.cost) && Number.isFinite(previous.cost)
+      && row.cost < previous.cost - 1e-6;
+    if (tokenReset || costReset) {
+      if (current.length) segments.push(current);
+      current = [];
+    }
+    current.push(row);
+    previous = row;
+  }
+  if (current.length) segments.push(current);
+  return segments;
+}
+
 function groupBy(rows, keyFn) {
   const map = new Map();
   for (const row of rows) {
@@ -494,7 +583,7 @@ async function analyze({ maxStepsPerWindow = 400 } = {}) {
     && Date.now() - analyzeCache.at < ANALYZE_CACHE_MS) {
     return analyzeCache.value;
   }
-  const rows = await allRows();
+  const rows = removeMisclassifiedLiveCodexRows(await allRows());
   rows.sort((a, b) => String(a.t).localeCompare(String(b.t)));
 
   const accounts = [];
@@ -509,8 +598,9 @@ async function analyze({ maxStepsPerWindow = 400 } = {}) {
         // the larger percentage span rather than by mixing them.
         const candidates = [];
         for (const [, srcRows] of groupBy(cycleRows, (r) => r.src)) {
-          if (srcRows.length < 2) continue;
-          candidates.push(summarizeSeries(srcRows));
+          const latestSegment = splitCounterResetSegments(srcRows).at(-1) || [];
+          if (latestSegment.length < 2) continue;
+          candidates.push(summarizeSeries(latestSegment));
         }
         if (!candidates.length) {
           const only = cycleRows[cycleRows.length - 1];
@@ -603,4 +693,8 @@ module.exports = {
   analyze,
   normalizeWindows,
   readRows,
+  classifyCodexWindow,
+  splitCounterResetSegments,
+  removeMisclassifiedLiveCodexRows,
+  codexTurnCost,
 };
