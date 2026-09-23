@@ -1264,7 +1264,7 @@ function setReportAccount(accountId, included) {
   if (included) excluded.delete(accountId); else excluded.add(accountId);
   localStorage.setItem(REPORT_EXCLUDED_KEY, JSON.stringify([...excluded]));
   const totalPanel = document.getElementById('panel-total');
-  if (totalPanel) totalPanel.innerHTML = totalReportHtml(lastAllAccounts);
+  if (totalPanel) setHtml(totalPanel, totalReportHtml(lastAllAccounts));
 }
 function toggleHidden(accountId, visible) {
   const hidden = getHidden();
@@ -1610,7 +1610,7 @@ document.addEventListener('click', (e) => {
   if (range) {
     reportSetRange(Number(range.dataset.reportRange));
     const totalPanel = document.getElementById('panel-total');
-    if (totalPanel) totalPanel.innerHTML = totalReportHtml(lastAllAccounts);
+    if (totalPanel) setHtml(totalPanel, totalReportHtml(lastAllAccounts));
     return;
   }
 });
@@ -2190,7 +2190,7 @@ function ecoCard(account, win, metric, allowEstimate) {
   ];
 
   const rows = win.cycles.filter(c => ecoRate(c, metric) > 0);
-  const table = rows.length >= 2 ? `<details class="eco-details">
+  const table = rows.length >= 2 ? `<details class="eco-details" data-eco-details="${esc(key)}">
       <summary>Window breakdown (${rows.length} entries)</summary>
       <div class="table-scroll"><table class="eco-table">
       <thead><tr><th>Window</th><th>Span</th><th>Tokens</th><th>Cost</th><th>Tok / 1%</th><th>$ / 1%</th></tr></thead>
@@ -2362,7 +2362,23 @@ document.addEventListener('mousemove', (e) => {
 
 function renderLimitEconomics() {
   const el = document.getElementById('panel-limits');
-  if (el) el.innerHTML = limitEconomicsHtml(limitHistoryData);
+  if (!el) return;
+  // Preserve which breakdowns are open and the scroll position across the
+  // periodic re-render.
+  const open = new Set([...el.querySelectorAll('details[open][data-eco-details]')].map(d => d.dataset.ecoDetails));
+  const scroll = el.querySelector('.eco-scroll')?.scrollTop || 0;
+  if (!setHtml(el, limitEconomicsHtml(limitHistoryData))) return;
+  el.querySelectorAll('details[data-eco-details]').forEach(d => { if (open.has(d.dataset.ecoDetails)) d.open = true; });
+  const sc = el.querySelector('.eco-scroll');
+  if (sc) sc.scrollTop = scroll;
+}
+
+// Writes innerHTML only when it changed; returns whether it did.
+function setHtml(el, html) {
+  if (el._html === html) return false;
+  el.innerHTML = html;
+  el._html = html;
+  return true;
 }
 
 async function loadLimitHistory() {
@@ -2438,7 +2454,7 @@ function render(data) {
   ensureLayout(data.accounts, visible);
 
   const totalPanel = document.getElementById('panel-total');
-  if (totalPanel) totalPanel.innerHTML = totalReportHtml(data.accounts);
+  if (totalPanel) setHtml(totalPanel, totalReportHtml(data.accounts));
   renderLimitEconomics();
 
   for (const a of visible) {
@@ -2450,15 +2466,15 @@ function render(data) {
       usageErrorEl.textContent = a.usageError ? `Token history unavailable: ${a.usageError}` : '';
       usageErrorEl.hidden = !a.usageError;
     }
-    if (limitsEl) limitsEl.innerHTML = limitsCard(a, a.rateLimits);
-    if (statsEl) statsEl.innerHTML = statRow(a);
+    if (limitsEl) setHtml(limitsEl, limitsCard(a, a.rateLimits));
+    if (statsEl) setHtml(statsEl, statRow(a));
     if (modelsEl) {
       const tableOpts = a.provider === 'grok'
         ? { cacheWriteLabel: 'Reasoning', cacheReadLabel: 'Cache read' }
         : a.provider === 'opencode' || a.provider === 'antigravity'
           ? { cacheWriteLabel: 'Reasoning', cacheReadLabel: 'Cache read', reasoningColumn: true }
           : {};
-      modelsEl.innerHTML = modelTable(a.models || [], tableOpts);
+      setHtml(modelsEl, modelTable(a.models || [], tableOpts));
     }
   }
   updateCountdowns();
