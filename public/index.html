@@ -1184,7 +1184,10 @@
     stroke-linecap: round;
     stroke-linejoin: round;
   }
-  .trend-dot { fill: var(--surface); stroke: var(--accent-2); stroke-width: 2; }
+  .trend-area { fill: url(#trend-fill); stroke: none; }
+  .trend-dot { fill: var(--surface); stroke: var(--accent-2); stroke-width: 2; opacity: 0; transition: opacity 0.15s var(--ease); }
+  .trend-dot:hover, .trend-dot.last { opacity: 1; }
+  .trend-dot.last { fill: var(--accent-2); stroke: var(--surface); }
   .report-lower {
     flex: none;
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1448,8 +1451,13 @@ function usageTrendHtml(accounts, days) {
         const value = max * (1 - part);
         return `<line class="trend-grid" x1="${left}" y1="${yy}" x2="${W - right}" y2="${yy}"></line><text class="trend-axis" x="${left - 6}" y="${yy + 3}" text-anchor="end">${fmtTok(value)}</text>`;
       }).join('')}
+      <defs><linearGradient id="trend-fill" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="var(--accent-2)" stop-opacity="0.22"></stop>
+        <stop offset="100%" stop-color="var(--accent-2)" stop-opacity="0"></stop>
+      </linearGradient></defs>
+      ${days > 1 ? `<polygon class="trend-area" points="${x(0).toFixed(2)},${top + plotH} ${points} ${x(days - 1).toFixed(2)},${top + plotH}"></polygon>` : ''}
       <polyline class="trend-line" points="${points}"></polyline>
-      ${totals.map((value, index) => `<circle class="trend-dot" cx="${x(index)}" cy="${y(value)}" r="${days === 1 ? 5 : 3}"><title>${keys[index]}: ${fmtTok(value)} tokens</title></circle>`).join('')}
+      ${totals.map((value, index) => `<circle class="trend-dot${index === days - 1 ? ' last' : ''}" cx="${x(index)}" cy="${y(value)}" r="${days === 1 || index === days - 1 ? 4.5 : 3.5}"><title>${dateLabel(keys[index])}: ${fmtTok(value)} tokens</title></circle>`).join('')}
       ${tickIndexes.map(index => `<text class="trend-axis" x="${x(index)}" y="${H - 7}" text-anchor="${days > 1 && index === 0 ? 'start' : days > 1 && index === days - 1 ? 'end' : 'middle'}">${dateLabel(keys[index])}</text>`).join('')}
     </svg>
   </div>`;
