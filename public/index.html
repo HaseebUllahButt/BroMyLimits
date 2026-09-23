@@ -536,65 +536,6 @@
     line-height: 1.5;
   }
 
-  /* ---- cache strip -------------------------------------------------- */
-  /* What the cache just did, in the terms a person cares about: how much of
-     the work was skipped, and how fresh the answer is. It sits in the footer
-     because it explains the number above it rather than being one of them. */
-  .cachebar {
-    flex: none;
-    display: flex;
-    align-items: center;
-    gap: 0.6rem;
-    flex-wrap: wrap;
-    justify-content: center;
-    margin-top: 0.5rem;
-    padding: 0.42rem 0.7rem;
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    background: var(--surface);
-    box-shadow: var(--shadow-xs);
-    font-size: 0.7rem;
-    color: var(--ink-dim);
-  }
-  .cachebar .src {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.35rem;
-    font-weight: 600;
-    color: var(--ink-soft);
-  }
-  .cachebar .src i {
-    width: 7px; height: 7px; border-radius: 50%;
-    background: var(--good); flex: none;
-  }
-  .cachebar.is-stale .src i { background: var(--warn); }
-  .cachebar.is-scan .src i { background: var(--accent-2); }
-  .cachebar.is-empty .src i { background: var(--ink-faint); }
-  .cachebar .meter {
-    width: 108px; height: 6px; border-radius: 999px;
-    background: var(--surface-3); overflow: hidden; flex: none;
-  }
-  .cachebar .meter span {
-    display: block; height: 100%; border-radius: 999px;
-    background: var(--good); transition: width 0.4s var(--ease);
-  }
-  .cachebar .seg { white-space: nowrap; }
-  .cachebar .seg b { color: var(--ink-soft); font-weight: 600; font-variant-numeric: tabular-nums; }
-  .cachebar .sep { color: var(--border-strong); }
-  .cachebar .rescan {
-    margin-left: 0.1rem;
-    padding: 0.18rem 0.5rem;
-    border: 1px solid var(--border);
-    border-radius: 999px;
-    background: var(--surface-2);
-    color: var(--ink-dim);
-    font: inherit;
-    font-size: 0.68rem;
-    cursor: pointer;
-  }
-  .cachebar .rescan:hover { color: var(--ink); border-color: var(--border-strong); }
-  .cachebar .rescan:disabled { opacity: 0.55; cursor: default; }
-
   footer {
     flex: none;
     margin-top: 0.5rem;
@@ -1126,7 +1067,9 @@
     display: flex;
     align-items: center;
     gap: 0.6rem;
-    flex-wrap: wrap;
+    min-width: 0;
+    flex: 1;
+    justify-content: flex-end;
   }
   .eco-top-badge {
     display: inline-flex;
@@ -1152,7 +1095,13 @@
     display: flex;
     align-items: center;
     gap: 0.3rem;
-    flex-wrap: wrap;
+    min-width: 0;
+    max-width: 100%;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    padding: 0.15rem 0.1rem 0.35rem;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border-strong) transparent;
   }
   .eco-filter {
     position: relative;
@@ -1177,19 +1126,83 @@
   .eco-filter input:not(:checked) + span { opacity: 0.45; text-decoration: line-through; }
   .eco-filter input:focus-visible + span { outline: 2px solid var(--accent-2); outline-offset: 2px; }
 
-  /* --- Total Reports: right column with cost stats + token report card ------- */
-  .report-right-col {
-    display: flex;
-    flex-direction: column;
+  /* --- Usage report: one scroll surface, one story -------------------------- */
+  .report-body {
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 0 0.35rem 0.4rem 0;
+    scrollbar-width: thin;
+  }
+  .report-filters {
+    min-height: 2.15rem;
+    padding-bottom: 0.3rem;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border-strong) transparent;
+  }
+  .report-summary {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 0.6rem;
-    min-height: 0;
   }
-  .report-tok-card {
-    flex: 1;
-    min-height: 0;
+  .report-summary .stat { min-width: 0; }
+  .report-insights {
+    display: grid;
+    grid-template-columns: minmax(300px, 0.8fr) minmax(0, 1.2fr);
+    gap: 0.75rem;
+    align-items: stretch;
   }
-  .report-stats-tok { margin-top: 0.1rem; }
-  .tok-value { color: var(--accent-2) !important; }
+  .trend-card { min-width: 0; overflow: hidden; }
+  .trend-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.75rem;
+    margin-bottom: 0.45rem;
+  }
+  .trend-head .card-title { margin: 0 0 0.2rem; }
+  .trend-total {
+    font: 600 1.15rem/1.2 var(--mono);
+    letter-spacing: -0.035em;
+    color: var(--ink);
+  }
+  .trend-meta { margin-top: 0.15rem; color: var(--ink-dim); font-size: 0.7rem; }
+  .trend-up { color: var(--bad); }
+  .trend-down { color: var(--good); }
+  .trend-toolbar { display: flex; align-items: center; gap: 0.25rem; flex-wrap: wrap; justify-content: flex-end; }
+  .trend-chart { display: block; width: 100%; height: auto; min-height: 170px; }
+  .trend-grid { stroke: var(--border); stroke-width: 1; }
+  .trend-axis { fill: var(--ink-faint); font: 9px var(--mono); }
+  .trend-line {
+    fill: none;
+    stroke: var(--accent-2);
+    stroke-width: 2.5;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+  .trend-dot { fill: var(--surface); stroke: var(--accent-2); stroke-width: 2; }
+  .report-lower {
+    flex: none;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: start;
+  }
+  .top-models-card .table-scroll {
+    overflow: auto;
+    max-height: 15rem;
+    scrollbar-width: thin;
+  }
+  .top-models-card td.model-name {
+    max-width: 10rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  @media (max-width: 760px) {
+    .report-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .report-insights, .report-lower { grid-template-columns: 1fr; }
+    .eco-panel-head { align-items: flex-start; }
+    .eco-head-right { width: 100%; justify-content: flex-start; }
+    .eco-top-badge { display: none; }
+  }
 </style>
 </head>
 <body>
@@ -1204,7 +1217,6 @@
 
   <main id="panels"></main>
 
-  <div class="cachebar" id="cachebar" hidden></div>
   <footer id="footer">Local · refreshes every 30s · costs from real tokens × published rates</footer>
 </div>
 
@@ -1310,8 +1322,13 @@ function sumPeriod(accounts, period) {
   }, { cost: 0, tokens: 0 });
 }
 
+function modelHasUsage(model) {
+  const tokenTotal = Object.values(model?.tokens || {}).reduce((sum, value) => sum + (Number(value) || 0), 0);
+  return tokenTotal > 0 || (Number(model?.cost?.total) || 0) > 0;
+}
+
 function accountTotals(account) {
-  const models = account.models || [];
+  const models = (account.models || []).filter(modelHasUsage);
   const channels = models.reduce((sum, model) => {
     for (const key of ['input', 'output', 'cacheWrite', 'cacheRead']) {
       sum.tokens[key] += Number(model.tokens?.[key]) || 0;
@@ -1331,6 +1348,7 @@ function topModels(accounts) {
   const models = new Map();
   for (const account of accounts) {
     for (const model of account.models || []) {
+      if (!modelHasUsage(model)) continue;
       const row = models.get(model.modelName) || { name: model.modelName, tokens: 0, cost: 0, accounts: new Set() };
       row.tokens += ['input', 'output', 'cacheWrite', 'cacheRead'].reduce((sum, key) => sum + (Number(model.tokens?.[key]) || 0), 0);
       row.cost += Number(model.cost?.total) || 0;
@@ -1338,11 +1356,79 @@ function topModels(accounts) {
       models.set(model.modelName, row);
     }
   }
-  return [...models.values()].sort((a, b) => b.tokens - a.tokens).slice(0, 8);
+  return [...models.values()].sort((a, b) => b.tokens - a.tokens).slice(0, 5);
 }
 
-const reportMetricOf = () => localStorage.getItem('ccu-report-metric') === 'tokens' ? 'tokens' : 'cost';
-const reportSetMetric = (m) => localStorage.setItem('ccu-report-metric', m);
+const reportRangeOf = () => {
+  const value = Number(localStorage.getItem('ccu-report-range'));
+  return [1, 7, 30].includes(value) ? value : 30;
+};
+const reportSetRange = (days) => localStorage.setItem('ccu-report-range', String(days));
+
+function dateKey(date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+function dateDaysAgo(days) {
+  const date = new Date();
+  date.setHours(12, 0, 0, 0);
+  date.setDate(date.getDate() - days);
+  return date;
+}
+
+function usageTrendHtml(accounts, days) {
+  const keys = Array.from({ length: days }, (_, index) => dateKey(dateDaysAgo(days - index - 1)));
+  const previousKeys = new Set(Array.from({ length: days }, (_, index) => dateKey(dateDaysAgo(days * 2 - index - 1))));
+  const byAccount = accounts.map(account => {
+    const daily = new Map((account.daily || []).map(row => [row.date, Number(row.tokens) || 0]));
+    return { account, daily };
+  });
+  const totals = keys.map(key => byAccount.reduce((sum, row) => sum + (row.daily.get(key) || 0), 0));
+  const current = totals.reduce((sum, value) => sum + value, 0);
+  const previous = byAccount.reduce((sum, row) => {
+    for (const [key, value] of row.daily) if (previousKeys.has(key)) sum += value;
+    return sum;
+  }, 0);
+  const delta = previous ? ((current - previous) / previous) * 100 : null;
+
+  const W = 760, H = 220, left = 44, right = 10, top = 14, bottom = 28;
+  const plotW = W - left - right, plotH = H - top - bottom;
+  const max = Math.max(1, ...totals);
+  const x = index => days === 1 ? left + plotW / 2 : left + index * (plotW / (days - 1));
+  const y = value => top + plotH - (value / max) * plotH;
+  const points = totals.map((value, index) => `${x(index).toFixed(2)},${y(value).toFixed(2)}`).join(' ');
+  const tickIndexes = [...new Set([0, Math.floor((days - 1) / 3), Math.floor((days - 1) * 2 / 3), days - 1])];
+  const dateLabel = key => new Date(`${key}T12:00:00`).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  const deltaHtml = delta == null
+    ? 'No prior period yet'
+    : `<span class="${delta > 0 ? 'trend-up' : delta < 0 ? 'trend-down' : ''}">${delta > 0 ? '+' : ''}${delta.toFixed(0)}%</span> vs previous ${days}d`;
+
+  return `<div class="card trend-card">
+    <div class="trend-head">
+      <div>
+        <h2 class="card-title">Total tokens · ${days === 1 ? 'today' : `${days} days`}</h2>
+        <div class="trend-total">${fmtTok(current)}</div>
+        <div class="trend-meta">${fmtTok(current / days)} daily average · ${deltaHtml}</div>
+      </div>
+      <div class="trend-toolbar" aria-label="Token chart range">
+        ${[1, 7, 30].map(range => `<button class="eco-toggle${range === days ? ' active' : ''}" data-report-range="${range}">${range}d</button>`).join('')}
+      </div>
+    </div>
+    <svg class="trend-chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="Total tokens for the last ${days} day${days === 1 ? '' : 's'}">
+      ${[0, 0.5, 1].map(part => {
+        const yy = top + plotH * part;
+        const value = max * (1 - part);
+        return `<line class="trend-grid" x1="${left}" y1="${yy}" x2="${W - right}" y2="${yy}"></line><text class="trend-axis" x="${left - 6}" y="${yy + 3}" text-anchor="end">${fmtTok(value)}</text>`;
+      }).join('')}
+      <polyline class="trend-line" points="${points}"></polyline>
+      ${totals.map((value, index) => `<circle class="trend-dot" cx="${x(index)}" cy="${y(value)}" r="${days === 1 ? 5 : 3}"><title>${keys[index]}: ${fmtTok(value)} tokens</title></circle>`).join('')}
+      ${tickIndexes.map(index => `<text class="trend-axis" x="${x(index)}" y="${H - 7}" text-anchor="middle">${dateLabel(keys[index])}</text>`).join('')}
+    </svg>
+  </div>`;
+}
 
 function donutChartHtml(rows, grandCost, grandTokens, metric = 'cost') {
   const isTok = metric === 'tokens';
@@ -1450,10 +1536,10 @@ function totalReportHtml(accounts) {
     ...accountTotals(account)
   }));
 
-  const metric = reportMetricOf();
+  const range = reportRangeOf();
   const grandCost = periods.allTime.cost;
   const grandTokens = periods.allTime.tokens;
-  const donut = donutChartHtml(rows, grandCost, grandTokens, metric);
+  const donut = donutChartHtml(rows, grandCost, grandTokens, 'tokens');
 
   // Cost stats row
   const costStats = [
@@ -1468,19 +1554,6 @@ function totalReportHtml(accounts) {
       <div class="sub">${fmtTok(value.tokens)} tokens</div>
     </div>`).join('');
 
-  // Token stats row — mirrors the cost row but leads with tokens
-  const tokenStats = [
-    ['Today', periods.today],
-    ['Last 7 days', periods.last7d],
-    ['This month', periods.month],
-    ['All time', periods.allTime],
-  ].map(([label, value]) => `
-    <div class="stat">
-      <div class="label">${label}</div>
-      <div class="value tok-value">${fmtTok(value.tokens)}</div>
-      <div class="sub">${fmt$(value.cost)}</div>
-    </div>`).join('');
-
   const filters = accounts.map((account, index) => `
     <label class="report-filter" style="--filter-color:${reportColors[index % reportColors.length]}">
       <input type="checkbox" data-report-account="${account.id}" ${excluded.has(account.id) ? '' : 'checked'}>
@@ -1493,57 +1566,25 @@ function totalReportHtml(accounts) {
     <td>${fmtTok(model.tokens)}</td><td>${fmt$(model.cost)}</td>
   </tr>`).join('');
 
-  const body = rows.map(row => {
-    const t = row.channels.tokens;
-    return `<tr>
-      <td class="model-name"><span class="dot ${dotClass(row.account.provider)}" style="display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:.4rem"></span>${accountTitle(row.account)}</td>
-      <td>${fmt$(row.cost)}</td><td>${fmtTok(row.tokens)}</td>
-      <td>${fmtTok(t.input)}</td><td>${fmtTok(t.output)}</td>
-      <td>${fmtTok(t.cacheWrite + t.cacheRead)}</td>
-      <td>${row.account.cache ? (row.account.cache.hitRate * 100).toFixed(0) + '%' : '—'}</td>
-      <td>${row.models}</td>
-    </tr>`;
-  }).join('');
-
   return `<div class="panel-heading">Total Reports</div>
     <div class="report-body">
       <div class="report-filters"><span class="report-filter-label">Include</span>${filters}</div>
-      <div class="report-hero">
+      <div class="report-summary">${costStats}</div>
+      <div class="report-insights">
         <div class="card bars-card">
-          <div class="limits-head" style="margin-bottom:0.5rem">
-            <h2 class="card-title" style="margin:0">${metric === 'tokens' ? 'Tokens' : 'Cost'} by account · all time</h2>
-            <div class="eco-toolbar">
-              <button class="eco-toggle${metric === 'cost' ? ' active' : ''}" data-report-metric="cost">Dollars</button>
-              <button class="eco-toggle${metric === 'tokens' ? ' active' : ''}" data-report-metric="tokens">Tokens</button>
-            </div>
-          </div>
+          <h2 class="card-title">Tokens by account · all time</h2>
           ${donut}
         </div>
-        <div class="report-right-col">
-          <div class="report-stats">${costStats}</div>
-          <div class="report-tok-card card">
-            <h2 class="card-title">Token report</h2>
-            <div class="report-stats report-stats-tok">${tokenStats}</div>
-          </div>
-        </div>
+        ${usageTrendHtml(includedAccounts, range)}
       </div>
       <div class="report-lower">
-        <div class="card report-table-card">
-          <h2 class="card-title">Complete account report</h2>
-          <div class="table-scroll"><table>
-            <thead><tr><th>Account</th><th>Cost</th><th>Total tokens</th><th>Input</th><th>Output</th><th>Cache</th><th>Cache hit</th><th>Models</th></tr></thead>
-            <tbody>${body || '<tr><td colspan="8" class="empty">No included usage data</td></tr>'}</tbody>
-          </table></div>
-        </div>
-        <div class="report-lower-col">
-        ${promptCacheHtml(includedAccounts)}
+        ${promptCacheHtml(includedAccounts) || '<div class="card"><h2 class="card-title">Prompt cache</h2><p class="empty">No cache data reported yet.</p></div>'}
         <div class="card top-models-card">
-          <h2 class="card-title">Most used models · all time</h2>
+          <h2 class="card-title">Top 5 models · all time</h2>
           <div class="table-scroll"><table>
             <thead><tr><th>Model</th><th>Tokens</th><th>Cost</th></tr></thead>
             <tbody>${modelRows || '<tr><td colspan="3" class="empty">No included usage data</td></tr>'}</tbody>
           </table></div>
-        </div>
         </div>
       </div>
     </div>`;
@@ -1555,9 +1596,9 @@ document.addEventListener('change', (e) => {
     setReportAccount(reportAccount.dataset.reportAccount, reportAccount.checked);
     return;
   }
-  const ecoHideProvider = e.target.closest('[data-eco-hide-provider]');
-  if (ecoHideProvider) {
-    toggleEcoHidden(ecoHideProvider.dataset.ecoHideProvider, ecoHideProvider.checked);
+  const ecoHideAccount = e.target.closest('[data-eco-hide-account]');
+  if (ecoHideAccount) {
+    toggleEcoHidden(ecoHideAccount.dataset.ecoHideAccount, ecoHideAccount.checked);
     return;
   }
   const t = e.target.closest('[data-toggle-account]');
@@ -1565,16 +1606,18 @@ document.addEventListener('change', (e) => {
 });
 
 document.addEventListener('click', (e) => {
-  const btn = e.target.closest('[data-report-metric]');
-  if (!btn) return;
-  reportSetMetric(btn.dataset.reportMetric);
-  const totalPanel = document.getElementById('panel-total');
-  if (totalPanel) totalPanel.innerHTML = totalReportHtml(lastAllAccounts);
+  const range = e.target.closest('[data-report-range]');
+  if (range) {
+    reportSetRange(Number(range.dataset.reportRange));
+    const totalPanel = document.getElementById('panel-total');
+    if (totalPanel) totalPanel.innerHTML = totalReportHtml(lastAllAccounts);
+    return;
+  }
 });
 
 function donutDetailHtml(el) {
   const wrap = el.closest('[data-donut-metric]');
-  const isTok = (wrap?.dataset?.donutMetric || reportMetricOf()) === 'tokens';
+  const isTok = (wrap?.dataset?.donutMetric || 'tokens') === 'tokens';
   if (isTok) {
     return `<span class="donut-detail-name" title="${el.dataset.name}">${el.dataset.name}</span>
       <span class="donut-total">${el.dataset.tokens}</span>
@@ -1674,6 +1717,7 @@ function cell(cost, tokens) {
 }
 
 function modelTable(models, opts = {}) {
+  models = (models || []).filter(modelHasUsage);
   const writeLabel = opts.cacheWriteLabel || 'Cache write';
   const readLabel = opts.cacheReadLabel || 'Cache read';
   const reasoningColumn = !!opts.reasoningColumn;
@@ -1825,6 +1869,30 @@ function resetsAvailableLine(resetsAvailable) {
 
 const LIMITLESS_PROVIDERS = new Set(['opencode', 'devin']);
 
+function antigravityPoolLabel(items) {
+  const labels = items.map(item => item.label.toLowerCase());
+  const hasGemini = labels.some(label => label.includes('gemini'));
+  const hasClaude = labels.some(label => label.includes('claude'));
+  const hasGpt = labels.some(label => label.includes('gpt'));
+  if (hasGemini && !hasClaude && !hasGpt) return 'Gemini models';
+  if (!hasGemini && (hasClaude || hasGpt)) return hasClaude && hasGpt ? 'Claude / GPT models' : hasClaude ? 'Claude models' : 'GPT models';
+  return `${items.length} shared model limits`;
+}
+
+function collapseAntigravityLimits(items) {
+  const groups = new Map();
+  for (const item of items) {
+    const entry = item.entry || item.latest || {};
+    const key = `${entry.percent ?? entry.pct ?? ''}|${entry.remainingPercent ?? ''}|${entry.resetsAt || ''}`;
+    const group = groups.get(key) || [];
+    group.push(item);
+    groups.set(key, group);
+  }
+  return [...groups.values()].map(group => group.length === 1
+    ? group[0]
+    : { ...group[0], label: antigravityPoolLabel(group) });
+}
+
 function limitsCard(account, rateLimits) {
   // A note the user's own Refresh produced outranks one the server offered,
   // but an empty card with no explanation is the worst of the three.
@@ -1833,10 +1901,11 @@ function limitsCard(account, rateLimits) {
   const labels = account.limitLabels || {};
   const sessionLabel = rateLimits?.session?.label || labels.session || 'Session (5h)';
   const weeklyLabel = rateLimits?.weekly?.label || labels.weekly || 'Weekly';
-  const windowItems = (rateLimits?.windows?.length
+  let windowItems = (rateLimits?.windows?.length
     ? rateLimits.windows.map(w => ({ label: w.label, entry: w }))
     : [{ label: sessionLabel, entry: rateLimits?.session }, { label: weeklyLabel, entry: rateLimits?.weekly }]
   ).filter(item => item.entry);
+  if (account.provider === 'antigravity') windowItems = collapseAntigravityLimits(windowItems);
   const hasWindows = windowItems.length > 0;
   const plan = rateLimits?.planLabel || rateLimits?.subscriptionTier || account.planLabel || '';
   const heading = plan
@@ -1934,13 +2003,13 @@ document.getElementById('tabs').addEventListener('click', (e) => {
 
 let limitHistoryData = null;
 
-const ECO_HIDDEN_KEY = 'ccu-eco-hidden-providers';
+const ECO_HIDDEN_KEY = 'ccu-eco-hidden-accounts';
 function getEcoHidden() {
   try { return new Set(JSON.parse(localStorage.getItem(ECO_HIDDEN_KEY) || '[]')); } catch { return new Set(); }
 }
-function toggleEcoHidden(provider, visible) {
+function toggleEcoHidden(accountId, visible) {
   const hidden = getEcoHidden();
-  if (visible) hidden.delete(provider); else hidden.add(provider);
+  if (visible) hidden.delete(accountId); else hidden.add(accountId);
   localStorage.setItem(ECO_HIDDEN_KEY, JSON.stringify([...hidden]));
   renderLimitEconomics();
 }
@@ -2094,6 +2163,9 @@ function ecoCard(account, win, metric, allowEstimate) {
     provisional: () => `only ${Math.round(pts)} point${Math.round(pts) === 1 ? '' : 's'} measured — whole-number percentages make this imprecise so far`,
     none: () => 'no rate yet — it appears once the percentage moves',
   }[mode]();
+  const costBasisNote = account.provider === 'codex' && metric === 'cost'
+    ? '<span class="eco-badge" title="Estimated at published API token rates; separate from your ChatGPT plan price">API equivalent</span> · '
+    : '';
 
   const allMeasured = allPool ? ecoRate(allPool, metric) : null;
   const stats = [
@@ -2141,7 +2213,7 @@ function ecoCard(account, win, metric, allowEstimate) {
           <span class="unit">per 1%</span>
           ${mode === 'measured' || mode === 'none' ? '' : `<span class="eco-badge">${mode}</span>`}
         </div>
-        <p class="eco-why">${why}${current && current.mixedLogins
+        <p class="eco-why">${costBasisNote}${why}${current && current.mixedLogins
           ? ' · <span class="eco-flag">two logins seen in this window — its rate mixes both</span>'
           : ''}</p>
       </div>
@@ -2174,6 +2246,27 @@ function topProviderByTokens(accounts) {
   return topName ? { name: topName, tokens: topTok } : null;
 }
 
+function economicsWindowsFor(account, windows) {
+  const weekly = windows.filter(win => /weekly/i.test(win.key) || /weekly/i.test(win.label) || win.key === 'weekly');
+  if (account.provider === 'codex') {
+    // Codex exposes separate 5h and 7d limits. Other observed durations stay
+    // out of these standard-plan cards instead of being mislabeled as weekly.
+    return windows.filter(win => win.key === 'session' || weekly.some(w => w.key === win.key));
+  }
+  if (account.provider !== 'antigravity') return weekly.length ? weekly : windows;
+
+  // Antigravity reports one row per reasoning tier even when every tier draws
+  // from the same quota pool. Keep only the current generation of readings,
+  // then collapse identical percentages/reset times into the shared pool they
+  // actually represent.
+  const newest = Math.max(0, ...windows.map(win => Date.parse(win.latest?.t || 0) || 0));
+  const current = windows.filter(win => !newest || newest - (Date.parse(win.latest?.t || 0) || 0) < 36 * 60 * 60 * 1000);
+  return collapseAntigravityLimits(current.map(win => ({ ...win, entry: win.latest }))).map(win => {
+    const { entry, ...rest } = win;
+    return rest;
+  });
+}
+
 function limitEconomicsHtml(history) {
   if (!history) return '<p class="empty">Loading limit history…</p>';
   if (history.error) return `<p class="empty">${esc(history.error)}</p>`;
@@ -2181,26 +2274,23 @@ function limitEconomicsHtml(history) {
   const ecoHidden = getEcoHidden();
   const byId = new Map((lastAllAccounts || []).map(a => [a.id, a]));
 
-  // Build available providers from accounts present in history with rate-limit windows
-  const availableProviders = [];
-  const seenProviders = new Set();
+  // Account-level switches matter here: two Codex profiles can have unrelated
+  // plans and economics, so hiding a whole provider is too blunt.
+  const availableAccounts = [];
   const cards = [];
 
   for (const entry of (history.accounts || [])) {
     const account = byId.get(entry.id) || { id: entry.id, provider: entry.provider, label: entry.id };
-    const weeklyWindows = (entry.windows || []).filter(w => /weekly/i.test(w.key) || /weekly/i.test(w.label) || w.key === 'weekly');
-    const windowsToUse = weeklyWindows.length ? weeklyWindows : (entry.windows || []);
+    const windowsToUse = economicsWindowsFor(account, entry.windows || []);
     if (!windowsToUse.length) continue;
 
-    if (!seenProviders.has(account.provider)) {
-      seenProviders.add(account.provider);
-      availableProviders.push(account);
-    }
+    availableAccounts.push(account);
 
-    if (ecoHidden.has(account.provider)) continue;
+    if (ecoHidden.has(account.id)) continue;
 
     for (const win of windowsToUse) {
-      cards.push({ acct: entry.id, winKey: win.key, html: ecoCard(account, win, metric, true) });
+      const allowEstimate = win.key === 'weekly' || /weekly/i.test(win.label || '');
+      cards.push({ acct: entry.id, winKey: win.key, html: ecoCard(account, win, metric, allowEstimate) });
     }
   }
 
@@ -2211,11 +2301,10 @@ function limitEconomicsHtml(history) {
     ? `<span class="eco-top-badge"><span class="eco-top-dot dot ${dotClass(allEcoAccounts.find(a=>providerName(a.provider)===top.name)?.provider||'')}"></span>${esc(top.name)} · ${fmtTok(top.tokens)} tokens</span>`
     : '';
 
-  // Provider filter toggles
-  const providerToggles = availableProviders.map(a => `
+  const accountToggles = availableAccounts.map(a => `
     <label class="eco-filter" style="--filter-color:var(${accentVar(a.provider)})">
-      <input type="checkbox" data-eco-hide-provider="${a.provider}" ${ecoHidden.has(a.provider) ? '' : 'checked'}>
-      <span><span class="eco-top-dot dot ${dotClass(a.provider)}"></span>${providerName(a.provider)}</span>
+      <input type="checkbox" data-eco-hide-account="${a.id}" ${ecoHidden.has(a.id) ? '' : 'checked'}>
+      <span><span class="eco-top-dot dot ${dotClass(a.provider)}"></span>${accountTitle(a)}</span>
     </label>`).join('');
 
   // The shell is a fixed-height layout with every panel set to overflow:hidden,
@@ -2224,7 +2313,7 @@ function limitEconomicsHtml(history) {
       <div class="panel-heading" style="margin:0">Limit economics</div>
       <div class="eco-head-right">
         ${topBadge}
-        <div class="eco-provider-filters">${providerToggles}</div>
+        <div class="eco-provider-filters" aria-label="Limit economics accounts">${accountToggles}</div>
       </div>
     </div>
     <div class="eco-scroll">
@@ -2320,88 +2409,6 @@ function ensureLayout(allAccounts, visibleAccounts) {
     `<div class="panel${activeId === 'settings' ? ' active' : ''}" id="panel-settings">${settingsPanelHtml(allAccounts)}</div>`;
 }
 
-// ---- cache strip ------------------------------------------------------
-// Three questions, answered in one line: is this answer fresh, how much of
-// the scan did the cache skip, and how much did it actually read off disk.
-
-const SOURCE_TEXT = {
-  memory: 'from memory',
-  disk: 'from disk',
-  stale: 'stale — refreshing',
-  scan: 'freshly scanned',
-  empty: 'no cache yet',
-};
-
-function fmtBytes(n) {
-  if (!n) return '0 B';
-  const u = ['B', 'KB', 'MB', 'GB', 'TB'];
-  const i = Math.min(u.length - 1, Math.floor(Math.log(n) / Math.log(1024)));
-  return (n / Math.pow(1024, i)).toFixed(i ? 1 : 0) + ' ' + u[i];
-}
-
-function fmtAge(ms) {
-  if (ms == null || !isFinite(ms)) return '—';
-  const s = Math.max(0, Math.round(ms / 1000));
-  if (s < 60) return s + 's ago';
-  const m = Math.round(s / 60);
-  return m < 60 ? m + 'm ago' : Math.round(m / 60) + 'h ago';
-}
-
-function renderCache(c) {
-  const bar = document.getElementById('cachebar');
-  if (!bar || !c) return;
-  const f = c.files || {};
-  const db = c.databases || { considered: 0, reused: 0, scanned: 0 };
-  const reused = (f.sealed || 0) + (f.hits || 0);
-  const held = c.backingOff || [];
-  const slowest = (c.accounts || [])[0];
-
-  // This used to spell out the whole scan. It earned that space while the
-  // scanning was being fixed; at a steady 100% it is noise beside the prompt
-  // cache card, which is the cache a person actually pays for. So: how long
-  // the last scan took, anything still backing off, and the escape hatch.
-  // The full breakdown moves into the tooltip.
-  bar.hidden = false;
-  bar.className = 'cachebar' + (c.stale ? ' is-stale' : c.source === 'scan' ? ' is-scan' : c.source === 'empty' ? ' is-empty' : '');
-  bar.title =
-    `${SOURCE_TEXT[c.source] || c.source}, ${fmtAge(c.ageMs)}` +
-    (f.considered
-      ? `\n\nfiles: ${f.sealed || 0} sealed, ${f.hits || 0} unchanged, ${f.appended || 0} appended, ${f.parsed || 0} re-parsed of ${f.considered}` +
-        `\nread ${fmtBytes(c.bytes?.read)} of ${fmtBytes(c.bytes?.total)} (${Math.round((c.byteHitRate ?? 0) * 100)}% skipped)`
-      : '\n\nno scan yet this session') +
-    (db.considered ? `\ndatabases: ${db.reused} unchanged, ${db.scanned} re-scanned` : '') +
-    (c.indexRestored ? '\nfile index restored from disk at startup' : '') +
-    ((c.accounts || []).length ? '\n\nper account:\n' + c.accounts.map(a => `  ${a.ms}ms  ${a.id}`).join('\n') : '') +
-    (held.length ? '\n\nbacking off:\n' + held.map(h => `  ${h.key} - ${h.failures} failures, retry in ${Math.round(h.retryInMs / 1000)}s`).join('\n') : '');
-
-  const scanned = f.considered
-    ? `scan <b>${(c.lastScanMs || 0).toLocaleString()}ms</b>${slowest ? ` (${esc(slowest.provider)} ${slowest.ms.toLocaleString()}ms)` : ''}`
-    : 'no scan yet';
-  bar.innerHTML =
-    `<span class="src"><i></i>${scanned}</span>` +
-    (f.considered ? `<span class="seg">${(reused + db.reused).toLocaleString()} of ${(f.considered + db.considered).toLocaleString()} reused</span>` : '') +
-    (held.length ? `<span class="seg" style="color:var(--warn)">${held.length} backing off</span>` : '') +
-    `<button class="rescan" id="rescan"${c.refreshing ? ' disabled' : ''} title="Re-check every file, seal included. Hold Shift to re-read every byte.">${c.refreshing ? 'refreshing…' : 'Rescan'}</button>`;
-}
-
-// A full rescan ignores every tier, including the seal - the escape hatch for
-// "I do not believe these numbers".
-document.addEventListener('click', async (e) => {
-  const btn = e.target.closest('#rescan');
-  if (!btn) return;
-  // Plain click re-checks every file and re-reads only what changed. Shift is
-  // the heavier one: distrust the cache key and re-read every byte.
-  const deep = e.shiftKey;
-  btn.disabled = true;
-  btn.textContent = deep ? 'rebuilding…' : 'rescanning…';
-  try {
-    const res = await fetch(deep ? '/api/usage?rebuild=1' : '/api/usage?force=1');
-    render(await res.json());
-  } catch {
-    btn.textContent = 'failed';
-  }
-});
-
 let lastFetchedAt = null;
 
 async function load() {
@@ -2413,8 +2420,6 @@ async function load() {
 function render(data) {
   lastFetchedAt = data.fetchedAt;
   document.getElementById('updated').textContent = 'updated ' + new Date(data.fetchedAt).toLocaleTimeString();
-  renderCache(data.cache);
-
   if (!data.accounts || !data.accounts.length) {
     document.getElementById('tabs').innerHTML = '';
     document.getElementById('panels').innerHTML = '<p class="empty">No Claude, Codex, Grok, Antigravity, OpenCode, or Devin accounts detected on this machine.</p>';
