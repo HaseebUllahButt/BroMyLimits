@@ -1318,6 +1318,14 @@ function settingsPanelHtml(accounts) {
   `;
 }
 
+function accountColor(account, accounts) {
+  const base = `var(${accentVar(account.provider)})`;
+  const same = accounts.filter(a => a.provider === account.provider);
+  const n = same.findIndex(a => a.id === account.id);
+  if (n <= 0) return base;
+  return `color-mix(in srgb, ${base} ${Math.max(40, 100 - n * 35)}%, var(--ink-faint))`;
+}
+
 const reportColors = [
   'var(--report-1)', 'var(--report-2)', 'var(--report-3)', 'var(--report-4)',
   'var(--report-5)', 'var(--report-6)', 'var(--report-7)',
@@ -1462,14 +1470,14 @@ function donutChartHtml(rows, grandCost, grandTokens, metric = 'cost') {
     const dash = Math.max(frac * C - (segments.length > 1 ? 1.5 : 0), 0);
     const off = -acc * C;
     acc += frac;
-    const color = reportColors[row.index % reportColors.length];
+    const color = row.color;
     return `<circle class="donut-seg" data-seg-index="${i}" data-name="${esc(accountTitle(row.account))}" data-cost="${esc(fmt$(row.cost))}" data-pct="${(frac * 100).toFixed(1)}" data-tokens="${esc(fmtTok(row.tokens))}" style="animation-delay:${i * 0.06}s" r="${R}" cx="64" cy="64" fill="none" stroke="${color}" stroke-width="17" stroke-linecap="butt" stroke-dasharray="${dash} ${C - dash}" stroke-dashoffset="${off}" transform="rotate(-90 64 64)"></circle>`;
   }).join('');
   const legend = segments.map((row, i) => {
     const val = isTok ? row.tokens : row.cost;
     const frac = total ? val / total : 0;
     const share = frac * 100;
-    const color = reportColors[row.index % reportColors.length];
+    const color = row.color;
     const valDisplay = isTok ? fmtTok(row.tokens) : fmt$(row.cost);
     return `
     <div class="bar-row donut-legend-row" data-legend-index="${i}" data-name="${esc(accountTitle(row.account))}" data-cost="${esc(fmt$(row.cost))}" data-pct="${share.toFixed(1)}" data-tokens="${esc(fmtTok(row.tokens))}" style="animation-delay:${0.1 + i * 0.05}s">
@@ -1550,6 +1558,7 @@ function totalReportHtml(accounts) {
   const rows = includedAccounts.map(account => ({
     account,
     index: accounts.findIndex(a => a.id === account.id),
+    color: accountColor(account, accounts),
     ...accountTotals(account)
   }));
 
@@ -1572,7 +1581,7 @@ function totalReportHtml(accounts) {
     </div>`).join('');
 
   const filters = accounts.map((account, index) => `
-    <label class="report-filter" style="--filter-color:${reportColors[index % reportColors.length]}">
+    <label class="report-filter" style="--filter-color:${accountColor(account, accounts)}">
       <input type="checkbox" data-report-account="${account.id}" ${excluded.has(account.id) ? '' : 'checked'}>
       <span>${accountTitle(account)}</span>
     </label>`).join('');
