@@ -1232,6 +1232,25 @@
   .pace-note.over { color: var(--warn); }
   td.zero { color: var(--ink-faint); font-family: var(--mono); }
 
+  .stat { transition: border-color 0.15s var(--ease); }
+  .stat:hover { border-color: var(--border-strong); }
+  .report-summary .stat:first-child .value { color: var(--accent); }
+  .card-title { letter-spacing: 0.09em; }
+
+  /* Horizontal strips fade out at the edge instead of cutting a chip in half */
+  .tabs, .report-filters {
+    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+            mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+    padding-right: 24px;
+    scrollbar-width: none;
+  }
+  .report-filters::-webkit-scrollbar { display: none; }
+
+  .tab:focus-visible, .eco-toggle:focus-visible, .refresh-btn:focus-visible, summary:focus-visible {
+    outline: 2px solid var(--accent-2);
+    outline-offset: 2px;
+  }
+  footer { opacity: 0.8; }
 </style>
 </head>
 <body>
@@ -2062,6 +2081,14 @@ document.addEventListener('click', (e) => {
   const btn = e.target.closest('.refresh-btn');
   if (btn) refreshLimits(btn.dataset.account);
 });
+
+// A mouse wheel scrolls the overflowing tab and filter strips sideways.
+document.addEventListener('wheel', (e) => {
+  const strip = e.target.closest('.tabs, .report-filters');
+  if (!strip || strip.scrollWidth <= strip.clientWidth || Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
+  strip.scrollLeft += e.deltaY;
+  e.preventDefault();
+}, { passive: false });
 
 document.getElementById('tabs').addEventListener('click', (e) => {
   const btn = e.target.closest('.tab');
