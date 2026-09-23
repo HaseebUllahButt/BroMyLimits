@@ -122,3 +122,13 @@ test('Claude Opus 5.5 local usage includes input, output, cache-write, and cache
   }, '2026-09-23');
   assert.deepEqual(cost, { input: 4, output: 20, cacheWrite: 5, cacheRead: 0.2 });
 });
+
+test('5h session windows are excluded from limit economics, others are kept', () => {
+  const { isFiveHourWindow } = require('../limit-history.js');
+  assert.equal(isFiveHourWindow('session', 'Session (5h)'), true);
+  assert.equal(isFiveHourWindow('claude-gpt-5h', 'Claude/GPT · 5h'), true);
+  assert.equal(isFiveHourWindow('gemini-five-hour-limit', 'Gemini — Five Hour Limit'), true);
+  assert.equal(isFiveHourWindow('weekly', 'Weekly'), false);
+  assert.equal(isFiveHourWindow('15h', '15h'), false);
+  assert.equal(isFiveHourWindow('30d', '30d'), false);
+});

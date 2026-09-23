@@ -2249,9 +2249,9 @@ function topProviderByTokens(accounts) {
 function economicsWindowsFor(account, windows) {
   const weekly = windows.filter(win => /weekly/i.test(win.key) || /weekly/i.test(win.label) || win.key === 'weekly');
   if (account.provider === 'codex') {
-    // Codex exposes separate 5h and 7d limits. Other observed durations stay
-    // out of these standard-plan cards instead of being mislabeled as weekly.
-    return windows.filter(win => win.key === 'session' || weekly.some(w => w.key === win.key));
+    // Only the weekly lane is measured. Other observed durations (a 30d
+    // reading appeared briefly) stay out instead of being mislabeled as weekly.
+    return weekly;
   }
   if (account.provider !== 'antigravity') return weekly.length ? weekly : windows;
 

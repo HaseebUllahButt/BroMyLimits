@@ -81,6 +81,14 @@ function isPhantomCodexWeekly(row) {
     && row.cycle === '2026-09-14T14:45:00.000Z';
 }
 
+// The 5-hour session windows are no longer measured: their per-percent rate
+// swings by an order of magnitude between windows and it drowned out the
+// weekly figure that actually governs capacity. Rows already on disk are
+// skipped on read and new readings are not recorded.
+function isFiveHourWindow(key, label) {
+  return key === 'session' || /(^|[^0-9])5h\b|five.hour/i.test(`${key || ''} ${label || ''}`);
+}
+
 // Flattens each provider's differently-shaped rateLimits object into a single
 // list of {key, label, percent, resetsAt}. Providers that expose a `windows`
 // array (Grok, Antigravity) already enumerate every bucket; the others carry
@@ -166,6 +174,7 @@ async function recordSnapshot(usage) {
     if (typeof tok !== 'number' || typeof cost !== 'number') continue;
     if (tok === 0 && cost === 0) continue;
     for (const w of windows) {
+      if (isFiveHourWindow(w.key, w.label)) continue;
       const row = {
         v: SCHEMA_VERSION,
         t,
@@ -212,6 +221,7 @@ async function readRows(filePath) {
         if (row.pct > 0 && row.tok === 0 && row.cost === 0) continue;
         if (row.acct === 'codex-default' && row.tok === 178978787) continue;
         if (isPhantomCodexWeekly(row)) continue;
+        if (isFiveHourWindow(row.win, row.label)) continue;
         rows.push(row);
       }
     } catch {
@@ -767,6 +777,7 @@ module.exports = {
   backfillState,
   analyze,
   normalizeWindows,
+  isFiveHourWindow,
   readRows,
   classifyCodexWindow,
   splitCounterResetSegments,
