@@ -1772,7 +1772,7 @@ function fmtResetsAt(iso) {
   if (!iso) return '';
   const d = new Date(iso);
   const diffMs = d - new Date();
-  if (diffMs <= 0) return 'resets soon';
+  if (diffMs <= 0) return `reset ${d.toLocaleDateString([], { month: 'short', day: 'numeric' })} · awaiting a fresh reading`;
   const hrs = diffMs / 3600000;
   if (hrs < 24) return `resets in ${Math.round(hrs)}h`;
   return `resets in ${Math.round(hrs / 24)}d (${d.toLocaleDateString([], { month: 'short', day: 'numeric' })})`;
@@ -2071,6 +2071,8 @@ function ecoChartFrame(key, caption, body) {
 // each individual percentage tick — so Codex's months of history and Claude's
 // first few points are read exactly the same way.
 function ecoBars(items, metric, key, caption) {
+  items = items.filter(i => Number.isFinite(i.value) && i.value > 0);
+  if (!items.length) return '<p class="eco-empty">No spend recorded against this limit yet — the percentage moved but the priced usage behind it is zero.</p>';
   const values = items.map(i => i.value);
   const peak = Math.max(...values);
   const top = peak * 1.15;
@@ -2093,7 +2095,10 @@ function ecoBars(items, metric, key, caption) {
     const label = (i === peakIdx || i === items.length - 1)
       ? `<text class="eco-mark-text" x="${(x + barW / 2).toFixed(1)}" y="${(yTop - 5).toFixed(1)}">${ecoFmt(item.value, metric)}</text>`
       : '';
-    const xLabel = (items.length <= 8 || i % 2 === 0)
+    // Keep at most ~10 x labels (always including the newest) so dates never
+    // overprint each other on long histories.
+    const every = Math.ceil(items.length / 10);
+    const xLabel = ((items.length - 1 - i) % every === 0)
       ? `<text class="eco-axis-text" x="${(x + barW / 2).toFixed(1)}" y="${ECO_H - 7}" text-anchor="middle">${item.x}</text>`
       : '';
     return `<g><path class="eco-bar" data-eco-bar="${key}-${i}" d="${d}"></path>${label}${xLabel}
@@ -2114,10 +2119,10 @@ function ecoChart(win, metric, key) {
   if (windows.length >= 1) {
     const items = windows.slice().reverse().map(c => ({
       value: ecoRate(c, metric),
-      x: ecoDate(c.to),
-      tip: `${ecoFmt(ecoRate(c, metric), metric)} per 1% · ${c.pctStart}→${c.pctEnd}% · ${fmtTok(c.tokens)} / ${fmt$(c.cost)}`,
+      x: c.cycle === win.latest?.cycle ? 'now' : ecoDate(c.resetsAt || c.to),
+      tip: `${ecoFmt(ecoRate(c, metric), metric)} per 1% · ${c.pctStart}→${c.pctEnd}%${c.partial ? ' (partial)' : ''} · ${fmtTok(c.tokens)} / ${fmt$(c.cost)} · ${c.cycle === win.latest?.cycle ? 'current window' : `reset ${ecoDate(c.resetsAt || c.to)}`}`,
     }));
-    return ecoBars(items, metric, key, `${unit} per 1%, by window`);
+    return ecoBars(items, metric, key, `${unit} per 1%, by window (labelled by reset date)`);
   }
   const steps = (win.steps || []).slice(-ECO_MAX_TICKS);
   if (steps.length) {
@@ -2141,7 +2146,7 @@ function ecoCard(account, win, metric, allowEstimate) {
   const pooled = win.lifetime;
   const allPool = win.lifetimeAll || null;
   const current = win.current;
-  const measured = ecoRate(pooled, metric);
+  const measured = ecoRate(pooled, metric) > 0 ? ecoRate(pooled, metric) : null;
   const estimate = ecoEstimate(account, win, metric, allowEstimate);
   const pts = pooled ? pooled.pct : 0;
   // A partial cycle opens mid-window, so its slope skips the spend that
@@ -2190,7 +2195,7 @@ function ecoCard(account, win, metric, allowEstimate) {
       <div class="table-scroll"><table class="eco-table">
       <thead><tr><th>Window</th><th>Span</th><th>Tokens</th><th>Cost</th><th>Tok / 1%</th><th>$ / 1%</th></tr></thead>
       <tbody>${rows.map(c => `<tr>
-        <td>${ecoDate(c.from)} – ${ecoDate(c.to)}</td>
+        <td>${ecoDate(c.from)} – ${ecoDate(c.to)}${c.cycle === win.latest?.cycle ? ' <span class="dim">(current)</span>' : ''}</td>
         <td class="${c.partial ? 'dim' : ''}">${c.pctStart}→${c.pctEnd}%</td>
         <td>${fmtTok(c.tokens)}</td>
         <td>${fmt$(c.cost)}</td>
