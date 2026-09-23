@@ -1215,6 +1215,21 @@
     .eco-head-right { width: 100%; justify-content: flex-start; }
     .eco-top-badge { display: none; }
   }
+  /* --- polish -------------------------------------------------------------- */
+  .limit-item .bar-track { position: relative; overflow: visible; }
+  .limit-item .bar-fill { border-radius: 999px; }
+  .pace-mark {
+    position: absolute;
+    top: -3px;
+    bottom: -3px;
+    width: 2px;
+    margin-left: -1px;
+    border-radius: 1px;
+    background: var(--ink-faint);
+    box-shadow: 0 0 0 2px var(--surface);
+  }
+  .pace-note { color: var(--ink-faint); }
+  .pace-note.over { color: var(--warn); }
 </style>
 </head>
 <body>
@@ -1822,19 +1837,43 @@ function shortLimitLabel(label) {
     .replace(/\s+Limit$/i, '');
 }
 
+// Share of the window already elapsed, from its reset time and a duration
+// inferred from the label. Null when either is unknown.
+function windowElapsed(label, resetsAt) {
+  const text = String(label || '');
+  const hours = /week|7d/i.test(text) ? 168 : /5h|five.hour|session/i.test(text) ? 5 : /30d|month/i.test(text) ? 720 : null;
+  const reset = Date.parse(resetsAt || '');
+  if (!hours || !Number.isFinite(reset)) return null;
+  const left = reset - Date.now();
+  if (left <= 0 || left > hours * 3600000) return null;
+  return 1 - left / (hours * 3600000);
+}
+
+function paceMark(elapsed, pct) {
+  if (elapsed == null) return { mark: '', note: '' };
+  const at = Math.round(elapsed * 100);
+  const ahead = pct - at;
+  const note = Math.abs(ahead) < 5 ? 'on pace' : ahead > 0 ? `${ahead} pts ahead of pace` : `${-ahead} pts under pace`;
+  return {
+    mark: `<i class="pace-mark" style="left:${at}%" title="${at}% of the window has elapsed"></i>`,
+    note: `<span class="pace-note${ahead >= 5 ? ' over' : ''}">${note}</span>`,
+  };
+}
+
 function limitItem(label, entry) {
   if (!entry) return '';
   const pct = entry.percent == null ? 0 : entry.percent;
   const cls = pct >= 90 ? 'bad' : pct >= 70 ? 'warn' : '';
   const pctLabel = entry.percent == null ? '—' : `${pct}%`;
+  const pace = entry.percent == null ? { mark: '', note: '' } : paceMark(windowElapsed(label, entry.resetsAt), pct);
   const detail = entry.used != null && entry.limit != null
     ? `${Number(entry.used).toLocaleString()} / ${Number(entry.limit).toLocaleString()}`
     : '';
   return `
     <div class="limit-item">
       <div class="head"><span>${shortLimitLabel(label)}</span><span class="pct">${pctLabel}</span></div>
-      <div class="bar-track"><div class="bar-fill ${cls}" style="width:${entry.percent == null ? 0 : pct}%"></div></div>
-      <div class="reset">${[detail, fmtResetsAt(entry.resetsAt)].filter(Boolean).join(' · ')}</div>
+      <div class="bar-track"><div class="bar-fill ${cls}" style="width:${entry.percent == null ? 0 : pct}%"></div>${pace.mark}</div>
+      <div class="reset">${[detail, fmtResetsAt(entry.resetsAt), pace.note].filter(Boolean).join(' · ')}</div>
     </div>`;
 }
 
@@ -2192,6 +2231,7 @@ function ecoCard(account, win, metric, allowEstimate) {
   const mode = trusted ? 'measured' : (estimate != null ? 'estimated' : (measured != null ? 'provisional' : 'none'));
   const pct = win.latest?.pct ?? 0;
   const barCls = pct >= 90 ? 'bad' : pct >= 70 ? 'warn' : '';
+  const ecoPace = paceMark(windowElapsed(win.label || win.key, win.latest?.resetsAt), pct);
 
   const isRecent = !!(allPool && pooled && pooled.cycles !== allPool.cycles);
   const why = {
@@ -2258,8 +2298,8 @@ function ecoCard(account, win, metric, allowEstimate) {
       </div>
       <div class="limit-item eco-meter">
         <div class="head"><span>consumed</span><span class="pct">${pct}%</span></div>
-        <div class="bar-track"><div class="bar-fill ${barCls}" style="width:${Math.min(100, pct)}%"></div></div>
-        <div class="reset">${win.latest?.resetsAt ? fmtResetsAt(win.latest.resetsAt) : ''}</div>
+        <div class="bar-track"><div class="bar-fill ${barCls}" style="width:${Math.min(100, pct)}%"></div>${ecoPace.mark}</div>
+        <div class="reset">${[win.latest?.resetsAt ? fmtResetsAt(win.latest.resetsAt) : '', ecoPace.note].filter(Boolean).join(' · ')}</div>
       </div>
     </div>
     <div class="stat-row">${stats.map(s => `
