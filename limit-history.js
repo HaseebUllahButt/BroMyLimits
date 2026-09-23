@@ -69,6 +69,18 @@ function classifyCodexWindow(minutes) {
   return { key: `${value}m`, label: `${value}m` };
 }
 
+// On 2026-09-07 Codex briefly reported a second weekly lane anchored to a
+// 2026-09-14T14:45 reset (pct 0→2 over ~2h while ~$7.61 of real spend accrued),
+// then two stale echoes of it on 09-09. The real weekly lane had meanwhile
+// re-anchored to 09-15. The phantom slice reads as ~$3.80 per 1% — an order
+// of magnitude off the lane's true rate — so it is filtered out of the
+// derived view rather than left to distort the chart and the pooled estimate.
+function isPhantomCodexWeekly(row) {
+  return row.acct === 'codex-default'
+    && row.win === 'weekly'
+    && row.cycle === '2026-09-14T14:45:00.000Z';
+}
+
 // Flattens each provider's differently-shaped rateLimits object into a single
 // list of {key, label, percent, resetsAt}. Providers that expose a `windows`
 // array (Grok, Antigravity) already enumerate every bucket; the others carry
@@ -146,11 +158,13 @@ async function recordSnapshot(usage) {
   const dataAt = usage?.fetchedAt || t;
   const rows = [];
   for (const acct of usage?.accounts || []) {
+    if (acct.usageError) continue;
     const windows = normalizeWindows(acct.rateLimits);
     if (!windows.length) continue;
     const tok = acct?.allTime?.tokens;
     const cost = acct?.allTime?.cost;
     if (typeof tok !== 'number' || typeof cost !== 'number') continue;
+    if (tok === 0 && cost === 0) continue;
     for (const w of windows) {
       const row = {
         v: SCHEMA_VERSION,
@@ -194,7 +208,12 @@ async function readRows(filePath) {
     if (!line) continue;
     try {
       const row = JSON.parse(line);
-      if (row && typeof row.pct === 'number') rows.push(row);
+      if (row && typeof row.pct === 'number') {
+        if (row.pct > 0 && row.tok === 0 && row.cost === 0) continue;
+        if (row.acct === 'codex-default' && row.tok === 178978787) continue;
+        if (isPhantomCodexWeekly(row)) continue;
+        rows.push(row);
+      }
     } catch {
       // A torn final line from a crash mid-append: skip it, keep the rest.
     }
@@ -251,10 +270,13 @@ const CODEX_PRICING = {
   'gpt-5.4-pro': { input: 30, cachedInput: 30, output: 180 },
 };
 
+// Pricing cut 2026-07-30: Luna 80% off, Terra 20% off. Before that date the
+// old rates were 5x (Luna) and 1.25x (Terra) higher. Using the new price for
+// old turns underestimates cost and makes the lifetime $/1% too low.
 const CODEX_CUTOVER_MS = Date.parse('2026-07-30T00:00:00Z');
 const CODEX_SOL_PROMO_START_MS = Date.parse('2026-08-21T00:00:00Z');
 const CODEX_PRICING_PRE_CUT = {
-  'gpt-5.6-luna': { input: 1, cachedInput: 0.1, output: 6 },
+  'gpt-5.6-luna': { input: 1.0, cachedInput: 0.1, output: 6 },
   'gpt-5.6-terra': { input: 2.5, cachedInput: 0.25, output: 15 },
 };
 const CODEX_PRICING_PRE_SOL_PROMO = {
@@ -273,8 +295,8 @@ function codexRatesForModel(modelName, timestamp) {
   return CODEX_PRICING[key];
 }
 
-function codexTurnCost(modelName, usage, timestamp) {
-  const rates = codexRatesForModel(modelName, timestamp);
+function codexTurnCost(modelName, usage, t) {
+  const rates = codexRatesForModel(modelName, t);
   if (!rates) return 0;
   const cached = usage.cached_input_tokens || 0;
   const fresh = Math.max(0, (usage.input_tokens || 0) - cached);
@@ -458,7 +480,14 @@ function stabilize(rows) {
   let cycle = null;
   let cycleResetsMs = -Infinity;
   let peakPct = -Infinity;
+  let peakTok = 0;
   for (const row of rows) {
+    if (row.pct > 0 && row.tok === 0 && row.cost === 0) continue;
+    if (row.acct === 'codex-default' && row.tok === 178978787) continue;
+    if (isPhantomCodexWeekly(row)) continue;
+    if (peakTok > 0 && row.tok < peakTok * 0.5) continue;
+    peakTok = Math.max(peakTok, row.tok || 0);
+
     const resetsMs = row.resetsAt ? Date.parse(row.resetsAt) : NaN;
     if (cycle === null) {
       cycle = row.cycle;
@@ -635,9 +664,28 @@ async function analyze({ maxStepsPerWindow = 400 } = {}) {
       cycles.sort((a, b) => String(b.to).localeCompare(String(a.to)));
 
       const rated = cycles.filter((c) => c.tokensPerPct != null);
-      const totalPct = rated.reduce((s, c) => s + c.pctSpan, 0);
-      const totalTokens = rated.reduce((s, c) => s + c.tokens, 0);
-      const totalCost = rated.reduce((s, c) => s + c.cost, 0);
+      // Exclude partial cycles from the pooled rate — they start mid-window and
+      // miss the spend before the ledger began, which biases the average down
+      // (e.g. Codex weekly partials 1.9M-3.3M vs complete 2.5M-11M). Fall back
+      // to all rated if no complete cycle exists (early boot).
+      const ratedComplete = rated.filter((c) => !c.partial);
+      const poolSource = ratedComplete.length ? ratedComplete : rated;
+      // Recent windows are more predictive than a 40-day mean — models and
+      // pricing drift (Codex Luna 80% cut 2026-07-30) so the lifetime mean
+      // understates current capacity by ~2.5x (461M vs 1.13B for Codex weekly).
+      // Pool the newest 5 complete windows (≈ last 3-5 weeks) where available.
+      const RECENT_N = 5;
+      const recentPool = poolSource.slice(0, RECENT_N);
+      const recentPct = recentPool.reduce((s, c) => s + c.pctSpan, 0);
+      const useRecent = recentPool.length >= 2 && recentPct >= 5;
+      const chosenPool = useRecent ? recentPool : poolSource;
+      const totalPct = chosenPool.reduce((s, c) => s + c.pctSpan, 0);
+      const totalTokens = chosenPool.reduce((s, c) => s + c.tokens, 0);
+      const totalCost = chosenPool.reduce((s, c) => s + c.cost, 0);
+      // Keep full-history pool for reference/debug.
+      const allTotalPct = rated.reduce((s, c) => s + c.pctSpan, 0);
+      const allTotalTokens = rated.reduce((s, c) => s + c.tokens, 0);
+      const allTotalCost = rated.reduce((s, c) => s + c.cost, 0);
 
       const steps = cycles
         .flatMap((c) => c.steps.map((s) => ({ ...s, cycle: c.cycle })))
@@ -650,11 +698,12 @@ async function analyze({ maxStepsPerWindow = 400 } = {}) {
         label: latest.label || winKey,
         latest: { t: latest.t, pct: latest.pct, resetsAt: latest.resetsAt, cycle: latest.cycle },
         current: cycles.find((c) => c.cycle === latest.cycle) || null,
-        // Pooled across every observed cycle: the most stable estimate of what
-        // one percent costs, since single cycles can be short or lopsided.
+        // Pooled over recent complete windows (≈ 5) — more predictive than an
+        // all-time mean when models/pricing drift. Falls back to all complete
+        // windows when fewer than 2 recent windows exist.
         lifetime: totalPct > 0
           ? {
-            cycles: rated.length,
+            cycles: chosenPool.length,
             pct: totalPct,
             tokens: totalTokens,
             cost: totalCost,
@@ -662,6 +711,32 @@ async function analyze({ maxStepsPerWindow = 400 } = {}) {
             costPerPct: totalCost / totalPct,
             projectedTokensAt100: (totalTokens / totalPct) * 100,
             projectedCostAt100: (totalCost / totalPct) * 100,
+          }
+          : null,
+        // Full-history pool kept for debugging / cross-check.
+        lifetimeAll: allTotalPct > 0
+          ? {
+            cycles: rated.length,
+            pct: allTotalPct,
+            tokens: allTotalTokens,
+            cost: allTotalCost,
+            tokensPerPct: allTotalTokens / allTotalPct,
+            costPerPct: allTotalCost / allTotalPct,
+            projectedTokensAt100: (allTotalTokens / allTotalPct) * 100,
+            projectedCostAt100: (allTotalCost / allTotalPct) * 100,
+          }
+          : null,
+        // Explicit recent pool (newest 5 complete) for the UI's cross-check.
+        recent: recentPool.length
+          ? {
+            cycles: recentPool.length,
+            pct: recentPct,
+            tokens: recentPool.reduce((s, c) => s + c.tokens, 0),
+            cost: recentPool.reduce((s, c) => s + c.cost, 0),
+            tokensPerPct: recentPool.reduce((s, c) => s + c.tokens, 0) / recentPct,
+            costPerPct: recentPool.reduce((s, c) => s + c.cost, 0) / recentPct,
+            projectedTokensAt100: (recentPool.reduce((s, c) => s + c.tokens, 0) / recentPct) * 100,
+            projectedCostAt100: (recentPool.reduce((s, c) => s + c.cost, 0) / recentPct) * 100,
           }
           : null,
         cycles: cycles.map(({ steps: _drop, ...rest }) => rest),
