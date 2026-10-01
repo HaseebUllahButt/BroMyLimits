@@ -2665,7 +2665,10 @@ function opencodeDeepseekCost(modelName, usage, timestampMs) {
 // that was 3.9s and 0.7s respectively - spent every single refresh, including
 // the overwhelming majority where the agent had not been used since the last
 // one and the answer could not possibly have changed.
-const dbResultCache = new ResultCache({ id: 'db' });
+// The id doubles as a format stamp: scan results saved under an older id are
+// ignored on load. db2 retired results computed before OpenCode's session_v2
+// table was read.
+const dbResultCache = new ResultCache({ id: 'db2' });
 
 /**
  * The database plus the WAL, which is where a committed write actually lands.
@@ -2721,9 +2724,14 @@ function scanOpencodeSessionsUncached(dbPath) {
   let db;
   try {
     db = new DatabaseSync(dbPath, { readOnly: true });
-    const sessionStmt = db.prepare(
-      'SELECT id, model, agent, cost, tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, tokens_cache_write, time_created FROM session',
-    );
+    // Newer OpenCode builds keep sessions in session_v2, which holds every row
+    // the legacy session table has plus sessions created since. Reading only
+    // the legacy table silently drops those, so take both, legacy first.
+    const sessionCols = 'id, model, agent, cost, tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, tokens_cache_write, time_created';
+    const hasV2 = !!db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'session_v2'").get();
+    const sessionStmt = db.prepare(hasV2
+      ? `SELECT ${sessionCols} FROM session UNION ALL SELECT ${sessionCols} FROM session_v2 WHERE id NOT IN (SELECT id FROM session)`
+      : `SELECT ${sessionCols} FROM session`);
     const messageStmt = db.prepare(`
       SELECT m.session_id AS session_id,
         json_extract(m.data, '$.modelID') AS model_id,
@@ -2966,6 +2974,29 @@ async function getDevinAccountUsage(account, force, { rebuild = false } = {}) {
   section.planLabel = null;
   section.usageSources = scanned.sources.length ? scanned.sources : ['Devin CLI'];
   section.scan = stats;
+  return applyArchivedUsage(section, await loadArchivedUsage(account.id));
+}
+
+// Usage a provider once reported but whose source data has since been wiped
+// (Devin recreated its database, for one). Kept in archived-usage.json beside
+// this file, as {"<account id>": {"tokens": N, "cost": N, "label": "..."}}, and
+// added to the all-time totals only. There is no history behind it, so the
+// daily series and per-model tables are left exactly as scanned.
+async function loadArchivedUsage(accountId) {
+  try {
+    const all = JSON.parse(await readFile(path.join(__dirname, 'archived-usage.json'), 'utf8'));
+    return all?.[accountId] || null;
+  } catch {
+    return null;
+  }
+}
+
+function applyArchivedUsage(section, archived) {
+  const tokens = Number(archived?.tokens) || 0;
+  const cost = Number(archived?.cost) || 0;
+  if (!tokens && !cost) return section;
+  section.allTime = { cost: section.allTime.cost + cost, tokens: section.allTime.tokens + tokens };
+  section.usageSources = [...(section.usageSources || []), archived.label || `archived ${tokens.toLocaleString('en-US')} tokens`];
   return section;
 }
 
@@ -3091,7 +3122,7 @@ const STALE_MAX_MS = 60 * 60_000;
 // Bumped whenever the shape of an account section changes: the disk cache
 // holds whole replies, so a stale one silently serves the old shape and the
 // new field simply never appears (prompt-cache stats, added at v4).
-const DISK_CACHE_VERSION = 4;
+const DISK_CACHE_VERSION = 5;
 const DISK_CACHE_PATH = path.join(__dirname, 'usage-cache.json');
 const SCAN_INDEX_PATH = process.env.CC_USAGE_SCAN_INDEX || path.join(__dirname, 'scan-index.json');
 const fileCaches = [claudeSessionCache, codexRolloutCache, dbResultCache];
@@ -3518,6 +3549,8 @@ module.exports = {
   maintainOpencodeDatabases,
   scanCodexSessions,
   scanClaudeSessions,
+  scanOpencodeSessionsUncached,
+  applyArchivedUsage,
   codexTurnCost,
   formatCodexLocalRateLimits,
   server,
