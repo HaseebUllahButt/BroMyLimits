@@ -639,6 +639,36 @@ function splitCounterResetSegments(series) {
   return segments;
 }
 
+// The backfill is replayed with the current price table, while each live row
+// froze the dollar total of the pricing the server had when it was taken. A
+// live series spanning a price-table update therefore jumps upward (a model
+// that had no rate starts costing money) and that jump reads as spend. So the
+// backfill is taken as the record up to its last row, and live rows only
+// extend it past that point, rebased onto the backfill's counters.
+function stitchLiveOntoBackfill(backRows, liveRows) {
+  const bLast = backRows.at(-1);
+  const after = liveRows.filter((r) => String(r.t) > String(bLast.t));
+  if (!after.length) return null;
+  // The spend between the backfill's last turn and the first later live row is
+  // only known if a live row just before that point was on the same pricing,
+  // which shows as the two records agreeing on dollars there.
+  let base = { live: after[0], back: bLast };
+  const anchor = liveRows.filter((r) => String(r.t) <= String(bLast.t)).at(-1);
+  if (anchor) {
+    const backAt = backRows.filter((r) => String(r.t) <= String(anchor.t)).at(-1);
+    if (backAt && Math.abs(anchor.cost - backAt.cost) <= Math.max(0.5, Math.abs(backAt.cost) * 0.002)) {
+      base = { live: anchor, back: backAt };
+    }
+  }
+  const rebased = after.map((r) => ({
+    ...r,
+    src: 'stitched',
+    tok: base.back.tok + (r.tok - base.live.tok),
+    cost: base.back.cost + (r.cost - base.live.cost),
+  }));
+  return [...backRows, ...rebased];
+}
+
 function groupBy(rows, keyFn) {
   const map = new Map();
   for (const row of rows) {
@@ -690,7 +720,14 @@ async function analyze({ maxStepsPerWindow = 400 } = {}) {
         // cycle straddling both is summarized from whichever source observed
         // the larger percentage span rather than by mixing them.
         const candidates = [];
-        for (const [, srcRows] of groupBy(cycleRows, (r) => r.src)) {
+        const bySrc = groupBy(cycleRows, (r) => r.src);
+        if (bySrc.has('backfill') && bySrc.has('live')) {
+          const stitched = stitchLiveOntoBackfill(bySrc.get('backfill'), bySrc.get('live'));
+          const latestSegment = stitched ? splitCounterResetSegments(stitched).at(-1) || [] : [];
+          // Listed first so it wins a tie on percentage span.
+          if (latestSegment.length >= 2) candidates.push(summarizeSeries(latestSegment));
+        }
+        for (const [, srcRows] of bySrc) {
           const latestSegment = splitCounterResetSegments(srcRows).at(-1) || [];
           if (latestSegment.length < 2) continue;
           candidates.push(summarizeSeries(latestSegment));
@@ -860,6 +897,7 @@ module.exports = {
   readRows,
   classifyCodexWindow,
   splitCounterResetSegments,
+  stitchLiveOntoBackfill,
   stabilize,
   removeMisclassifiedLiveCodexRows,
   codexTurnCost,

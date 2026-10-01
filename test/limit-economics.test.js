@@ -161,3 +161,24 @@ test('Codex plan ids get readable names and side models are recognised', () => {
   assert.ok(limitHistory.isCodexSideModel('codex-auto-review'));
   assert.ok(!limitHistory.isCodexSideModel('gpt-6.1-sol'));
 });
+
+test('live rows only extend the backfill, so a price-table jump in them is not read as spend', () => {
+  const row = (src, t, pct, tok, cost) => ({
+    acct: 'codex-default', provider: 'codex', src, win: 'weekly', t, pct, tok, cost, cycle: 'week-1',
+  });
+  const back = [
+    row('backfill', '2026-10-01T00:00:00Z', 0, 1000, 100),
+    row('backfill', '2026-10-01T06:00:00Z', 4, 2000, 110),
+  ];
+  // Old live rows were priced without one model; after the restart the total
+  // jumps up to match the backfill.
+  const live = [
+    row('live', '2026-10-01T00:00:10Z', 0, 1050, 95),
+    row('live', '2026-10-01T05:00:00Z', 3, 1850, 97),
+    row('live', '2026-10-01T06:00:10Z', 4, 2060, 110),
+    row('live', '2026-10-01T09:00:00Z', 10, 5060, 140),
+  ];
+  const out = limitHistory.stitchLiveOntoBackfill(back, live);
+  assert.deepEqual(out.map((r) => r.cost), [100, 110, 110, 140]);
+  assert.deepEqual(out.map((r) => r.tok), [1000, 2000, 2000, 5000]);
+});
