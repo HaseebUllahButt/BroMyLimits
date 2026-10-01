@@ -785,7 +785,7 @@
     flex: none;
   }
   .report-filter input { position: absolute; opacity: 0; pointer-events: none; }
-  .report-filter span {
+  .report-filter > span {
     display: inline-flex;
     align-items: center;
     gap: 0.38rem;
@@ -798,7 +798,7 @@
     cursor: pointer;
     transition: 0.15s var(--ease);
   }
-  .report-filter span::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--filter-color); }
+  .report-filter > span::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--filter-color); }
   .report-filter input:checked + span { color: var(--ink); border-color: var(--border-strong); box-shadow: var(--shadow-xs); }
   .report-filter input:not(:checked) + span { opacity: 0.48; text-decoration: line-through; }
   .report-filter input:focus-visible + span { outline: 2px solid var(--accent-2); outline-offset: 2px; }
@@ -1113,7 +1113,7 @@
     flex: none;
   }
   .eco-filter input { position: absolute; opacity: 0; pointer-events: none; }
-  .eco-filter span {
+  .eco-filter > span {
     display: inline-flex;
     align-items: center;
     gap: 0.35rem;
@@ -1636,8 +1636,7 @@ function totalReportHtml(accounts) {
     <td>${fmtTok(model.tokens)}</td><td>${fmt$(model.cost)}</td>
   </tr>`).join('');
 
-  return `<div class="panel-heading">Total Reports</div>
-    <div class="report-body">
+  return `<div class="report-body">
       <div class="report-filters"><span class="report-filter-label">Include</span>${filters}</div>
       <div class="report-summary">${costStats}</div>
       <div class="report-insights">
@@ -1784,7 +1783,7 @@ function statRow(section) {
 
 function cell(cost, tokens) {
   if (!cost && !tokens) return '<td class="zero">—</td>';
-  return `<td>${fmt$4(cost)}<span class="tok-sub">${fmtTok(tokens)} tok</span></td>`;
+  return `<td>${cost >= 0.01 ? fmt$(cost) : fmt$4(cost)}<span class="tok-sub">${fmtTok(tokens)} tok</span></td>`;
 }
 
 function modelTable(models, opts = {}) {
@@ -2521,7 +2520,6 @@ function ensureLayout(allAccounts, visibleAccounts) {
     `<div class="panel${activeId === 'limits' ? ' active' : ''}" id="panel-limits">${limitEconomicsHtml(limitHistoryData)}</div>` +
     visibleAccounts.map(a => `
       <div class="panel${a.id === activeId ? ' active' : ''}" id="panel-${a.id}" style="--tab-accent:var(${accentVar(a.provider)})">
-        <div class="panel-heading"><span class="dot ${dotClass(a.provider)}"></span>${accountTitle(a)}</div>
         ${a.usageSources?.length > 1 ? `<p class="usage-sources">Includes ${a.usageSources.slice(1).map(esc).join(' + ')}</p>` : ''}
         <p class="limit-stale usage-error" id="usage-error-${a.id}" hidden></p>
         ${LIMITLESS_PROVIDERS.has(a.provider) ? '' : `<div class="card" id="limits-${a.id}"></div>`}
