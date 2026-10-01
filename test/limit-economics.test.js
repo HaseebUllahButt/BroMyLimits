@@ -101,6 +101,7 @@ test('all GPT-6 models use their current API-equivalent rates for turns and dail
   const cases = [
     ['gpt-6-astra', 51],
     ['gpt-6-sol', 10.2],
+    ['gpt-6.1-sol', 10.1],
     ['gpt-6-luna', 0.51],
   ];
   const usage = { input_tokens: 1_000_000, cached_input_tokens: 1_000_000, output_tokens: 1_000_000 };
