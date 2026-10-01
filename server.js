@@ -2013,12 +2013,15 @@ function formatCodexLocalRateLimits(limits, timestampMs) {
     weekly,
     session,
     credits,
-    planLabel: limits.plan_type ? limits.plan_type.charAt(0).toUpperCase() + limits.plan_type.slice(1) : null,
+    planType: limits.plan_type || null,
+    planLabel: limitHistory.codexPlanLabel(limits.plan_type),
   };
 }
 
+// The id doubles as a format stamp, as with dbResultCache: codex2 retired
+// rollups that still counted the ChatGPT web and auto-review side models.
 const codexRolloutCache = new FileRollupCache({
-  id: 'codex',
+  id: 'codex2',
   parser: {
     // `model` has to survive an incremental read: a rollout names it once in a
     // turn_context near the top and every token_count after it is that model,
@@ -2048,6 +2051,7 @@ const codexRolloutCache = new FileRollupCache({
       const output = Number(u.output_tokens) || 0;
       const reasoning = Number(u.reasoning_output_tokens) || 0;
       const total = Number(u.total_tokens) || (input + cacheRead + output);
+      if (limitHistory.isCodexSideModel(state.model)) return;
       add(date, state.model || 'gpt-5.6-luna', { input, output, cacheRead, reasoning, total });
     },
   },
@@ -3122,7 +3126,7 @@ const STALE_MAX_MS = 60 * 60_000;
 // Bumped whenever the shape of an account section changes: the disk cache
 // holds whole replies, so a stale one silently serves the old shape and the
 // new field simply never appears (prompt-cache stats, added at v4).
-const DISK_CACHE_VERSION = 5;
+const DISK_CACHE_VERSION = 6;
 const DISK_CACHE_PATH = path.join(__dirname, 'usage-cache.json');
 const SCAN_INDEX_PATH = process.env.CC_USAGE_SCAN_INDEX || path.join(__dirname, 'scan-index.json');
 const fileCaches = [claudeSessionCache, codexRolloutCache, dbResultCache];

@@ -133,3 +133,31 @@ test('5h session windows are excluded from limit economics, others are kept', ()
   assert.equal(isFiveHourWindow('15h', '15h'), false);
   assert.equal(isFiveHourWindow('30d', '30d'), false);
 });
+
+test('a plan change mid-window starts a fresh cycle instead of keeping the old peak', () => {
+  const row = (t, pct, tok, plan) => ({
+    acct: 'codex-default', provider: 'codex', src: 'backfill', win: 'weekly',
+    t, pct, tok, cost: tok / 1000, cycle: 'week-1', resetsAt: '2026-10-07T19:17:49.000Z', plan,
+  });
+  const out = limitHistory.stabilize([
+    row('2026-09-30T20:00:00Z', 50, 1000, 'plus'),
+    row('2026-09-30T21:00:00Z', 54, 2000, 'plus'),
+    row('2026-10-01T05:00:00Z', 3, 3000, 'prolite'),
+    row('2026-10-01T06:00:00Z', 4, 4000, undefined),
+  ]);
+  assert.deepEqual(out.map((r) => r.pct), [50, 54, 3, 4]);
+  assert.equal(out[1].cycle, 'week-1');
+  assert.equal(out[2].cycle, 'week-1~prolite');
+  assert.equal(out[3].cycle, 'week-1~prolite');
+  assert.equal(out[3].plan, 'prolite');
+});
+
+test('Codex plan ids get readable names and side models are recognised', () => {
+  assert.equal(limitHistory.codexPlanLabel('prolite'), 'Pro 5x');
+  assert.equal(limitHistory.codexPlanLabel('pro'), 'Pro 20x');
+  assert.equal(limitHistory.codexPlanLabel('plus'), 'Plus');
+  assert.equal(formatCodexLocalRateLimits({ plan_type: 'prolite' }, Date.now()).planLabel, 'Pro 5x');
+  assert.ok(limitHistory.isCodexSideModel('chatgpt-web/high'));
+  assert.ok(limitHistory.isCodexSideModel('codex-auto-review'));
+  assert.ok(!limitHistory.isCodexSideModel('gpt-6.1-sol'));
+});

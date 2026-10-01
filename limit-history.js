@@ -147,9 +147,16 @@ function materiallyDifferent(prev, next) {
     || (Number.isFinite(prev.cost) && Number.isFinite(next.cost) && next.cost < prev.cost - 1e-6)) return true;
   // A changed login mid-window is exactly the event worth having on record.
   if (prev.who !== next.who) return true;
+  if (prev.plan !== next.plan) return true;
   // A heartbeat keeps long idle stretches visible as flat time rather than as
   // a gap, and re-anchors the counters if a percentage never moves.
   return Date.parse(next.t) - Date.parse(prev.t) > HEARTBEAT_MS;
+}
+
+// Raw plan id where the provider gives one (Codex), else the display label.
+function planOf(acct) {
+  const plan = acct?.rateLimits?.planType || acct?.planLabel || acct?.rateLimits?.planLabel;
+  return plan ? String(plan).toLowerCase() : null;
 }
 
 /**
@@ -189,6 +196,9 @@ async function recordSnapshot(usage) {
         cycle: cycleIdFor(w.resetsAt),
         tok,
         cost,
+        // The plan sets how much usage one percent is worth, so a change of
+        // plan has to be visible to the analysis.
+        ...(planOf(acct) ? { plan: planOf(acct) } : {}),
         // Which login produced this reading, where the provider exposes one. A
         // profile survives a re-authentication, so this is the only thing that
         // distinguishes readings taken before and after one.
@@ -306,6 +316,23 @@ function codexRatesForModel(modelName, timestamp) {
   return CODEX_PRICING[key];
 }
 
+// Codex logs a few side models that are not part of coding work (ChatGPT web
+// handoffs, the automatic reviewer). They have no published rate and only
+// clutter the totals, so their turns are left out entirely.
+function isCodexSideModel(modelName) {
+  const m = String(modelName || '');
+  return m.startsWith('chatgpt-web/') || m === 'codex-auto-review';
+}
+
+// Codex reports the plan as a bare id. "prolite" is the $100 Pro tier (5x
+// Plus limits) and "pro" the $200 one (20x).
+const CODEX_PLAN_LABELS = { prolite: 'Pro 5x', pro: 'Pro 20x' };
+function codexPlanLabel(planType) {
+  if (!planType) return null;
+  const id = String(planType).toLowerCase();
+  return CODEX_PLAN_LABELS[id] || id.charAt(0).toUpperCase() + id.slice(1);
+}
+
 function codexTurnCost(modelName, usage, t) {
   const rates = codexRatesForModel(modelName, t);
   if (!rates) return 0;
@@ -362,13 +389,17 @@ async function scanCodexRollout(filePath) {
     if (p.type !== 'token_count') continue;
     const usage = (p.info || {}).last_token_usage || {};
     const limits = p.rate_limits || {};
+    // A side-model turn still carries a valid limit reading, so the event is
+    // kept for its percentages; only its usage is dropped.
+    const side = isCodexSideModel(model);
     events.push({
       t: d.timestamp || null,
       model,
-      tokens: usage.total_tokens || 0,
-      cost: codexTurnCost(model, usage, d.timestamp),
+      tokens: side ? 0 : usage.total_tokens || 0,
+      cost: side ? 0 : codexTurnCost(model, usage, d.timestamp),
       primary: limits.primary || null,
       secondary: limits.secondary || null,
+      plan: limits.plan_type || null,
     });
   }
   return events;
@@ -443,12 +474,14 @@ async function backfillCodex({ sessionsDir, accountId = 'codex-default' } = {}) 
         cycle: cycleIdFor(w.resetsAt),
         tok,
         cost: Number(cost.toFixed(6)),
+        ...(e.plan ? { plan: e.plan } : {}),
       };
       const key = `${row.acct}|${row.win}`;
       const prev = last.get(key);
       // Every turn emits identical limits until the percentage ticks, so keep
       // only rows that move the percentage, the cycle, or the counters.
-      if (prev && prev.pct === row.pct && prev.cycle === row.cycle && prev.tok === row.tok) continue;
+      if (prev && prev.pct === row.pct && prev.cycle === row.cycle && prev.tok === row.tok
+        && prev.plan === row.plan) continue;
       last.set(key, row);
       rows.push(row);
     }
@@ -485,10 +518,15 @@ async function backfillState() {
 // itself stays a faithful record of what was observed.
 //
 // Within one window a percentage never falls and a reset time never moves
-// backwards, so a running maximum of each recovers the true curve.
+// backwards, so a running maximum of each recovers the true curve. The one
+// exception is a plan change: the provider rescales the meter (Codex Plus at
+// 54% became Pro at 4% inside the same week), so the window is split there and
+// the part on the new plan gets a cycle of its own.
 function stabilize(rows) {
   const out = [];
   let cycle = null;
+  let cycleId = null;
+  let plan = null;
   let cycleResetsMs = -Infinity;
   let peakPct = -Infinity;
   let peakTok = 0;
@@ -500,22 +538,31 @@ function stabilize(rows) {
     peakTok = Math.max(peakTok, row.tok || 0);
 
     const resetsMs = row.resetsAt ? Date.parse(row.resetsAt) : NaN;
+    const rowPlan = row.plan || null;
     if (cycle === null) {
       cycle = row.cycle;
+      cycleId = cycle;
+      plan = rowPlan;
       cycleResetsMs = Number.isFinite(resetsMs) ? resetsMs : -Infinity;
       peakPct = row.pct;
-    } else if (row.cycle !== cycle) {
-      if (!Number.isFinite(resetsMs) || resetsMs > cycleResetsMs) {
-        cycle = row.cycle;
-        cycleResetsMs = Number.isFinite(resetsMs) ? resetsMs : cycleResetsMs;
-        peakPct = row.pct; // genuine reset: the new window starts fresh
-      }
-      // Otherwise the row names an older window than one already seen — a
-      // stale read. Fold it into the current cycle rather than opening a
-      // duplicate one.
+    } else if (row.cycle !== cycle && (!Number.isFinite(resetsMs) || resetsMs > cycleResetsMs)) {
+      cycle = row.cycle;
+      cycleId = cycle;
+      plan = rowPlan || plan;
+      cycleResetsMs = Number.isFinite(resetsMs) ? resetsMs : cycleResetsMs;
+      peakPct = row.pct; // genuine reset: the new window starts fresh
+    } else if (rowPlan && plan && rowPlan !== plan) {
+      plan = rowPlan;
+      cycleId = `${cycle}~${rowPlan}`;
+      peakPct = row.pct;
+    } else if (rowPlan && !plan) {
+      plan = rowPlan;
     }
+    // Any other row names an older window than one already seen — a stale
+    // read. It is folded into the current cycle rather than opening a
+    // duplicate one. Rows without a plan (older ledger entries) inherit it.
     peakPct = Math.max(peakPct, row.pct);
-    out.push({ ...row, cycle, pct: peakPct, rawPct: row.pct });
+    out.push({ ...row, cycle: cycleId, plan, pct: peakPct, rawPct: row.pct });
   }
   return out;
 }
@@ -617,6 +664,12 @@ function invalidateAnalyzeCache() {
   analyzeCache = null;
 }
 
+function planLabelFor(provider, plan) {
+  if (!plan) return null;
+  if (provider === 'codex') return codexPlanLabel(plan);
+  return String(plan).charAt(0).toUpperCase() + String(plan).slice(1);
+}
+
 async function analyze({ maxStepsPerWindow = 400 } = {}) {
   if (analyzeCache
     && analyzeCache.maxStepsPerWindow === maxStepsPerWindow
@@ -645,6 +698,8 @@ async function analyze({ maxStepsPerWindow = 400 } = {}) {
         if (!candidates.length) {
           const only = cycleRows[cycleRows.length - 1];
           cycles.push({
+            plan: only.plan || null,
+            planLabel: planLabelFor(acctRows[0].provider, only.plan),
             src: only.src,
             cycle: cycleId,
             resetsAt: only.resetsAt,
@@ -670,11 +725,26 @@ async function analyze({ maxStepsPerWindow = 400 } = {}) {
         // percentages do not describe the same account throughout, so the rate
         // derived from it is not trustworthy without saying so.
         const logins = [...new Set(cycleRows.map((r) => r.who).filter(Boolean))];
-        cycles.push({ ...candidates[0], logins, mixedLogins: logins.length > 1 });
+        const plan = cycleRows[cycleRows.length - 1].plan || null;
+        cycles.push({
+          ...candidates[0],
+          plan,
+          planLabel: planLabelFor(acctRows[0].provider, plan),
+          logins,
+          mixedLogins: logins.length > 1,
+        });
       }
       cycles.sort((a, b) => String(b.to).localeCompare(String(a.to)));
 
-      const rated = cycles.filter((c) => c.tokensPerPct != null);
+      const latest = winRows[winRows.length - 1];
+      // One percent on a bigger plan buys several times as much, so rates from
+      // windows on another plan would drag the averages to the wrong scale.
+      const samePlan = (c) => !latest.plan || !c.plan || c.plan === latest.plan;
+      const otherPlanCycles = cycles.filter((c) => !samePlan(c));
+      const planSince = otherPlanCycles.length
+        ? cycles.filter(samePlan).reduce((min, c) => (!min || c.from < min ? c.from : min), null)
+        : null;
+      const rated = cycles.filter((c) => c.tokensPerPct != null && samePlan(c));
       // Exclude partial cycles from the pooled rate — they start mid-window and
       // miss the spend before the ledger began, which biases the average down
       // (e.g. Codex weekly partials 1.9M-3.3M vs complete 2.5M-11M). Fall back
@@ -703,10 +773,14 @@ async function analyze({ maxStepsPerWindow = 400 } = {}) {
         .sort((a, b) => String(a.t).localeCompare(String(b.t)))
         .slice(-maxStepsPerWindow);
 
-      const latest = winRows[winRows.length - 1];
       windows.push({
         key: winKey,
         label: latest.label || winKey,
+        plan: latest.plan || null,
+        planLabel: planLabelFor(acctRows[0].provider, latest.plan),
+        // Set when earlier windows ran on another plan: the averages above
+        // leave those out, and the page says so.
+        planSince,
         latest: { t: latest.t, pct: latest.pct, resetsAt: latest.resetsAt, cycle: latest.cycle },
         current: cycles.find((c) => c.cycle === latest.cycle) || null,
         // Pooled over recent complete windows (≈ 5) — more predictive than an
@@ -786,6 +860,9 @@ module.exports = {
   readRows,
   classifyCodexWindow,
   splitCounterResetSegments,
+  stabilize,
   removeMisclassifiedLiveCodexRows,
   codexTurnCost,
+  codexPlanLabel,
+  isCodexSideModel,
 };
