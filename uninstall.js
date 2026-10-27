@@ -48,6 +48,9 @@ async function main() {
   stopService();
   const launcher = path.join(binDir, isWindows ? 'cc-usage-dashboard.cmd' : 'cc-usage-dashboard');
   try { await fsp.rm(launcher, { force: true }); } catch {}
+  await fsp.rm(path.join(binDir, isWindows ? 'bro-my-limits.cmd' : 'bro-my-limits'), { force: true });
+  const { HelmSync } = require('./helm-sync');
+  await new HelmSync().stopSharing();
   if (path.resolve(appDir) !== path.resolve(__dirname) && appDir !== path.parse(appDir).root) {
     await fsp.rm(appDir, { recursive: true, force: true });
   }

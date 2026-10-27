@@ -64,8 +64,12 @@ async function installFiles() {
       const relative = path.relative(sourceDir, source);
       return !relative.startsWith('node_modules')
         && !relative.startsWith('.git')
+        && !relative.startsWith('test')
+        && !relative.startsWith('reports')
+        && !relative.startsWith('dist')
         && !/^((claude|grok)-live-limits-.*\.json)$/.test(path.basename(source))
-        && !relative.startsWith('limit-history')
+        && !/^limit-history.*\.(jsonl|json)$/.test(relative)
+        && relative !== 'helm-cache.json'
         && !relative.startsWith('usage-cache')
         && !relative.startsWith('scan-index')
         && relative !== 'grok-live-limits-grok-default.json';
@@ -120,6 +124,10 @@ async function writeLaunchers() {
       '',
     ].join('\r\n');
     await fsp.writeFile(path.join(binDir, 'cc-usage-dashboard.cmd'), cmd);
+    await fsp.writeFile(path.join(binDir, 'bro-my-limits.cmd'), [
+      '@echo off', `set \"PORT=${dashboardPort}\"`, `set \"CC_USAGE_HOME=${home}\"`,
+      `\"${nodePath}\" \"${path.join(appDir, 'cli.js')}\" %*`, '',
+    ].join('\r\n'));
     await fsp.writeFile(path.join(appDir, 'start-dashboard.ps1'), [
       `$env:CC_USAGE_HOME = '${home.replace(/'/g, "''")}'`,
       `$env:PORT = if ($args.Count -gt 0) { $args[0] } else { '${dashboardPort}' }`,
@@ -143,6 +151,11 @@ async function writeLaunchers() {
   const launcherPath = path.join(binDir, 'cc-usage-dashboard');
   await fsp.writeFile(launcherPath, launcher, { mode: 0o755 });
   await fsp.chmod(launcherPath, 0o755);
+  await fsp.writeFile(path.join(binDir, 'bro-my-limits'), [
+    '#!/usr/bin/env sh', `export PORT=\"\${PORT:-${dashboardPort}}\"`,
+    `export CC_USAGE_HOME=${shellQuote(home)}`,
+    `exec ${shellQuote(nodePath)} ${shellQuote(path.join(appDir, 'cli.js'))} \"$@\"`, '',
+  ].join('\n'), { mode: 0o755 });
   console.log(`Launcher: ${launcherPath}`);
 }
 
@@ -153,7 +166,7 @@ async function installLinuxService() {
   const servicePath = path.join(serviceDir, 'cc-usage-dashboard.service');
   const unit = [
     '[Unit]',
-    'Description=Claude Code usage dashboard',
+    'Description=Bro My Limits usage dashboard',
     'After=network-online.target',
     '',
     '[Service]',
@@ -179,7 +192,9 @@ async function installLinuxService() {
   await fsp.mkdir(serviceDir, { recursive: true });
   await fsp.writeFile(servicePath, unit);
   if (spawnSync('systemctl', ['--user', 'daemon-reload'], { stdio: 'ignore' }).status === 0) {
-    spawnSync('systemctl', ['--user', 'enable', '--now', 'cc-usage-dashboard.service'], { stdio: 'ignore' });
+    spawnSync('systemctl', ['--user', 'enable', 'cc-usage-dashboard.service'], { stdio: 'ignore' });
+    const started = spawnSync('systemctl', ['--user', 'restart', 'cc-usage-dashboard.service'], { stdio: 'inherit' });
+    if (started.status !== 0) throw new Error('could not start cc-usage-dashboard.service');
     console.log(`Systemd service enabled: ${servicePath}`);
   } else {
     console.log(`Systemd unit written: ${servicePath}`);
