@@ -3,14 +3,14 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Agent Usage</title>
+<title>Bro My Limits</title>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
 <style>
   :root {
-    color-scheme: light dark;
+    color-scheme: light;
     --bg: #f5f7fa;
     --surface: #ffffff;
     --surface-2: #eef2f6;
@@ -49,6 +49,7 @@
 
   @media (prefers-color-scheme: dark) {
     :root {
+      color-scheme: dark;
       --bg: #10151b;
       --surface: #182029;
       --surface-2: #202b36;
@@ -80,6 +81,7 @@
   }
 
   :root[data-theme="dark"] {
+    color-scheme: dark;
     --bg: #10151b; --surface: #182029; --surface-2: #202b36; --surface-3: #2a3743;
     --border: #2d3b48; --border-strong: #405261;
     --ink: #eef4f8; --ink-soft: #cbd6df; --ink-dim: #94a4b3; --ink-faint: #61717f;
@@ -93,6 +95,7 @@
   }
 
   :root[data-theme="light"] {
+    color-scheme: light;
     --bg: #f5f7fa; --surface: #ffffff; --surface-2: #eef2f6; --surface-3: #e3e9ef;
     --border: #dfe5eb; --border-strong: #c9d3dd;
     --ink: #1c2732; --ink-soft: #3b4a58; --ink-dim: #667384; --ink-faint: #98a5b3;
@@ -101,6 +104,11 @@
     --report-1: #cf725f; --report-2: #3e8ea0; --report-3: #7a6fb0;
     --report-4: #649478; --report-5: #b28b4f; --report-6: #a36c88; --report-7: #687f98;
     --good: #31834a; --warn: #bd751f; --bad: #bf493f;
+  }
+
+  select option, select optgroup {
+    color: var(--ink);
+    background-color: var(--surface);
   }
 
   *, *::before, *::after { box-sizing: border-box; }
@@ -576,7 +584,7 @@
     gap: 0.75rem;
     align-items: stretch;
   }
-  .bars-card { display: flex; flex-direction: column; gap: 0.55rem; justify-content: center; }
+  .bars-card { display: flex; flex-direction: column; gap: 0.55rem; justify-content: flex-start; align-self: start; }
   .bar-chart-empty { min-height: 96px; display: flex; align-items: center; }
   .bar-row + .bar-row { margin-top: 0.55rem; }
 
@@ -656,14 +664,22 @@
     color: var(--ink-dim);
   }
   .donut-legend {
+    max-height: 15rem;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border-strong) transparent;
+    scrollbar-gutter: stable;
+    padding-right: 0.35rem;
     flex: 1;
     min-width: 0;
     display: flex;
     flex-direction: column;
-    justify-content: center;
+    justify-content: flex-start;
     gap: 0.3rem;
   }
   .donut-legend-row {
+    flex: none;
     margin: 0 -0.45rem;
     padding: 0.3rem 0.45rem;
     border-radius: 10px;
@@ -1252,16 +1268,29 @@
     outline-offset: 2px;
   }
   footer { opacity: 0.8; }
+  .account-details { flex: none; border: 1px solid var(--border); border-radius: var(--radius); margin-top: 0.75rem; }
+  .account-details > summary { cursor: pointer; padding: 0.7rem 0.9rem; color: var(--ink-dim); font-size: 0.8rem; }
+  .account-detail-body { padding: 0 0.9rem 0.9rem; max-height: 32rem; overflow-y: auto; scrollbar-width: thin; }
+  .account-detail-body select { color: var(--ink); background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 0.4rem; max-width: 100%; font: inherit; font-size: 0.8rem; }
+  .account-detail-body .table-scroll { overflow-x: auto; margin-top: 0.8rem; }
+  .account-detail-body .card { margin-top: 0.8rem; }
+  .navbar-controls { display: flex; align-items: center; gap: 1rem; }
+  #machine-picker select { font: inherit; font-size: 0.8rem; color: var(--ink); background: transparent; border: 1px solid var(--border); border-radius: 6px; padding: 0.4rem 1.5rem 0.4rem 0.6rem; max-width: 180px; }
+  .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+  @media (max-width: 600px) { .navbar-controls { gap: 0.4rem; } .navbar-controls .updated { display: none; } }
 </style>
 </head>
 <body>
 <div class="shell">
   <header class="navbar">
     <div class="navbar-top">
-      <h1 class="brand"><span class="brand-mark" aria-hidden="true"></span>Agent Usage</h1>
-      <div class="updated" id="updated">loading…</div>
+      <h1 class="brand"><span class="brand-mark" aria-hidden="true"></span>Bro My Limits</h1>
+      <div class="navbar-controls">
+        <label id="machine-picker" hidden><span class="sr-only">Machine</span><select id="device-filter" aria-label="Machine"></select></label>
+        <div class="updated" id="updated">loading…</div>
+      </div>
     </div>
-    <nav class="tabs" id="tabs" aria-label="Accounts"></nav>
+    <nav class="tabs" id="tabs" aria-label="Providers"></nav>
   </header>
 
   <main id="panels"></main>
@@ -1269,6 +1298,7 @@
   <footer id="footer">Local · refreshes every 30s · costs from real tokens × published rates</footer>
 </div>
 
+<script src="/provider-groups.js"></script>
 <script>
 const fmt$ = n => '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const esc = s => String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -1282,14 +1312,16 @@ const fmtTok = n => {
 
 const dotClass = provider => provider === 'claude' ? 'anthropic' : provider === 'grok' ? 'xai' : provider === 'antigravity' ? 'google' : provider === 'opencode' ? 'opencode' : provider === 'devin' ? 'devin' : 'openai';
 const accentVar = provider => provider === 'claude' ? '--report-1' : provider === 'grok' ? '--report-6' : provider === 'antigravity' ? '--report-2' : provider === 'opencode' ? '--report-4' : provider === 'devin' ? '--report-5' : '--report-3';
-const providerName = provider => provider === 'claude' ? 'Claude Code' : provider === 'grok' ? 'Grok CLI' : provider === 'antigravity' ? 'Antigravity' : provider === 'opencode' ? 'OpenCode' : provider === 'devin' ? 'Devin' : 'Codex CLI';
+const providerName = provider => provider === 'helm' ? 'Helm' : provider === 'claude' ? 'Claude Code' : provider === 'grok' ? 'Grok CLI' : provider === 'antigravity' ? 'Antigravity' : provider === 'opencode' ? 'OpenCode' : provider === 'devin' ? 'Devin' : 'Codex CLI';
 const accountTitle = a => {
+  if (a.providerGroup) return providerName(a.provider);
   const lbl = (a.label || '').includes('@') ? 'default' : (a.label || 'default');
-  return `${providerName(a.provider)} — ${lbl}`;
+  return `${providerName(a.provider)} — ${lbl}${selectedDevice === 'all' && a.machineName ? ` · ${a.machineName}` : ''}`;
 };
 
 let builtForIds = null;
 let lastAllAccounts = [];
+let lastSourceAccounts = [];
 
 const HIDDEN_KEY = 'cc-usage-hidden-accounts';
 const ACTIVE_TAB_KEY = 'cc-usage-active-tab';
@@ -1321,7 +1353,7 @@ function toggleHidden(accountId, visible) {
   if (visible) hidden.delete(accountId); else hidden.add(accountId);
   setHidden(hidden);
   builtForIds = null;
-  render({ accounts: lastAllAccounts, fetchedAt: lastFetchedAt });
+  if (lastSnapshot) render(lastSnapshot);
 }
 
 function settingsPanelHtml(accounts) {
@@ -1331,7 +1363,7 @@ function settingsPanelHtml(accounts) {
 
   const rows = (list) => list.map(a => `
     <div class="toggle-row">
-      <span class="who"><span class="dot ${dotClass(a.provider)}"></span>${accountTitle(a)}</span>
+      <span class="who"><span class="dot ${dotClass(a.provider)}"></span>${esc(accountTitle(a))}</span>
       <label class="switch">
         <input type="checkbox" data-toggle-account="${a.id}" ${hidden.has(a.id) ? '' : 'checked'} />
         <span class="track"></span>
@@ -1346,7 +1378,7 @@ function settingsPanelHtml(accounts) {
 
   return `
     <div class="panel-heading">Settings</div>
-    <p class="settings-lead">Choose which accounts appear as tabs. Hidden accounts keep tracking in the background.</p>
+    <p class="settings-lead">Choose which providers appear as tabs. Hidden providers keep tracking in the background.</p>
     <div class="settings-body">
       ${section('Claude Code', byProvider.claude)}
       ${section('Codex CLI', byProvider.codex)}
@@ -1438,6 +1470,7 @@ function dateDaysAgo(days) {
 }
 
 function usageTrendHtml(accounts, days) {
+  if (accounts.some(a => a.dailyUnavailable)) return '<div class="card"><p class="empty">Daily charts will appear when these machines share their full usage history. Provider totals include the available Helm reports.</p></div>';
   const keys = Array.from({ length: days }, (_, index) => dateKey(dateDaysAgo(days - index - 1)));
   const previousKeys = new Set(Array.from({ length: days }, (_, index) => dateKey(dateDaysAgo(days * 2 - index - 1))));
   const byAccount = accounts.map(account => {
@@ -1527,7 +1560,7 @@ function donutChartHtml(rows, grandCost, grandTokens, metric = 'cost') {
     return `
     <div class="bar-row donut-legend-row" data-legend-index="${i}" data-name="${esc(accountTitle(row.account))}" data-cost="${esc(fmt$(row.cost))}" data-pct="${share.toFixed(1)}" data-tokens="${esc(fmtTok(row.tokens))}" style="animation-delay:${0.1 + i * 0.05}s">
       <div class="bar-row-head">
-        <span class="bar-row-name" title="${esc(accountTitle(row.account))}"><span class="legend-swatch" style="background:${color}"></span><span class="bar-row-label">${accountTitle(row.account)}</span></span>
+        <span class="bar-row-name" title="${esc(accountTitle(row.account))}"><span class="legend-swatch" style="background:${color}"></span><span class="bar-row-label">${esc(accountTitle(row.account))}</span></span>
         <span class="bar-row-val">${valDisplay}</span>
       </div>
       <div class="donut-legend-bar"><div class="bar-chart-track"><div class="bar-chart-fill" style="width:${share}%;background:${color}"></div></div><span class="donut-legend-pct">${share.toFixed(1)}%</span></div>
@@ -1538,13 +1571,13 @@ function donutChartHtml(rows, grandCost, grandTokens, metric = 'cost') {
   return `
     <div class="donut-wrap" data-donut-metric="${metric}">
       <div class="donut-box">
-        <svg viewBox="0 0 128 128" role="img" aria-label="${isTok ? 'Tokens' : 'Cost'} by account">
+        <svg viewBox="0 0 128 128" role="img" aria-label="${isTok ? 'Tokens' : 'Cost'} by provider">
           <circle cx="64" cy="64" r="${R}" fill="none" stroke="var(--surface-3)" stroke-width="17"></circle>
           ${arcs}
         </svg>
         <div class="donut-center" data-default-center="${esc(centerDefault)}">${centerDefault}</div>
       </div>
-      <div class="donut-legend">${legend}</div>
+      <div class="donut-legend" tabindex="0" role="region" aria-label="Usage by provider">${legend}</div>
     </div>`;
 }
 
@@ -1628,12 +1661,12 @@ function totalReportHtml(accounts) {
   const filters = accounts.map((account, index) => `
     <label class="report-filter" style="--filter-color:${accountColor(account, accounts)}">
       <input type="checkbox" data-report-account="${account.id}" ${excluded.has(account.id) ? '' : 'checked'}>
-      <span>${accountTitle(account)}</span>
+      <span>${esc(accountTitle(account))}</span>
     </label>`).join('');
 
   const models = topModels(includedAccounts);
   const modelRows = models.map((model, index) => `<tr>
-    <td class="model-name"><span class="model-rank">${index + 1}</span>${model.name}</td>
+    <td class="model-name"><span class="model-rank">${index + 1}</span>${esc(model.name)}</td>
     <td>${fmtTok(model.tokens)}</td><td>${fmt$(model.cost)}</td>
   </tr>`).join('');
 
@@ -1642,7 +1675,7 @@ function totalReportHtml(accounts) {
       <div class="report-summary">${costStats}</div>
       <div class="report-insights">
         <div class="card bars-card">
-          <h2 class="card-title">Tokens by account · all time</h2>
+          <h2 class="card-title">Tokens by provider · all time</h2>
           ${donut}
         </div>
         ${usageTrendHtml(includedAccounts, range)}
@@ -1783,6 +1816,7 @@ function statRow(section) {
 }
 
 function cell(cost, tokens) {
+  if (cost == null) return `<td>—<span class="tok-sub">${fmtTok(tokens)} tok</span></td>`;
   if (!cost && !tokens) return '<td class="zero">—</td>';
   return `<td>${cost >= 0.01 ? fmt$(cost) : fmt$4(cost)}<span class="tok-sub">${fmtTok(tokens)} tok</span></td>`;
 }
@@ -1806,11 +1840,12 @@ function modelTable(models, opts = {}) {
   }
 
   let body = '';
+  const channelCostsUnavailable = models.some(m => m.totalCostOnly);
   const grand = { input: 0, output: 0, cacheWrite: 0, cacheRead: 0, total: 0 };
   const grandTok = { input: 0, output: 0, cacheWrite: 0, cacheRead: 0 };
 
   for (const m of models) {
-    const c = m.cost, t = m.tokens;
+    const c = m.totalCostOnly ? { ...m.cost, input: null, output: null, cacheWrite: null, cacheRead: null } : m.cost, t = m.tokens;
     const writeCost = reasoningColumn ? 0 : c.cacheWrite;
     const writeTokens = reasoningColumn ? (t.reasoning || 0) : t.cacheWrite;
     grand.input += c.input; grand.output += c.output;
@@ -1818,7 +1853,7 @@ function modelTable(models, opts = {}) {
     grandTok.input += t.input; grandTok.output += t.output;
     grandTok.cacheWrite += writeTokens; grandTok.cacheRead += t.cacheRead;
     body += `<tr>
-      <td class="model-name">${m.modelName}</td>
+      <td class="model-name">${esc(m.modelName)}</td>
       ${cell(c.input, t.input)}
       ${cell(c.output, t.output)}
       ${cell(writeCost, writeTokens)}
@@ -1829,10 +1864,10 @@ function modelTable(models, opts = {}) {
 
   body += `<tr class="totals-row">
     <td>Total</td>
-    <td>${fmt$(grand.input)}<span class="tok-sub">${fmtTok(grandTok.input)} tok</span></td>
-    <td>${fmt$(grand.output)}<span class="tok-sub">${fmtTok(grandTok.output)} tok</span></td>
-    <td>${fmt$(grand.cacheWrite)}<span class="tok-sub">${fmtTok(grandTok.cacheWrite)} tok</span></td>
-    <td>${fmt$(grand.cacheRead)}<span class="tok-sub">${fmtTok(grandTok.cacheRead)} tok</span></td>
+    <td>${channelCostsUnavailable ? '—' : fmt$(grand.input)}<span class="tok-sub">${fmtTok(grandTok.input)} tok</span></td>
+    <td>${channelCostsUnavailable ? '—' : fmt$(grand.output)}<span class="tok-sub">${fmtTok(grandTok.output)} tok</span></td>
+    <td>${channelCostsUnavailable ? '—' : fmt$(grand.cacheWrite)}<span class="tok-sub">${fmtTok(grandTok.cacheWrite)} tok</span></td>
+    <td>${channelCostsUnavailable ? '—' : fmt$(grand.cacheRead)}<span class="tok-sub">${fmtTok(grandTok.cacheRead)} tok</span></td>
     <td class="total-col">${fmt$(grand.total)}</td>
   </tr>`;
 
@@ -1991,7 +2026,7 @@ function collapseAntigravityLimits(items) {
 function limitsCard(account, rateLimits) {
   // A note the user's own Refresh produced outranks one the server offered,
   // but an empty card with no explanation is the worst of the three.
-  const note = lastRefreshNoteByAccount[account.id] || rateLimits?.note || '';
+  const note = lastRefreshNoteByAccount[account.id] || (account.remote && !rateLimits ? 'This device has no shared limit snapshot. Install Bro My Limits there for limit details.' : rateLimits?.note) || '';
   const noteHtml = note ? `<div class="limit-stale">${esc(note)}</div>` : '';
   const labels = account.limitLabels || {};
   const sessionLabel = rateLimits?.session?.label || labels.session || 'Session (5h)';
@@ -2033,7 +2068,32 @@ function limitsCard(account, rateLimits) {
     ${unifiedNote}${noteHtml}${freshness}${creditsLine(rateLimits.credits)}${resetsAvailableLine(rateLimits.resetsAvailable)}`;
 }
 
+const selectedAccountByProvider = new Map();
+function accountDetailsHtml(group) {
+  const account = group.members.find(a => a.id === selectedAccountByProvider.get(group.provider)) || group.members[0];
+  if (!account) return '';
+  selectedAccountByProvider.set(group.provider, account.id);
+  const label = a => `${a.label || 'default'}${a.machineName ? ` · ${a.machineName}` : ''}`;
+  const options = group.members.map(a => `<option value="${esc(a.id)}"${a.id === account.id ? ' selected' : ''}>${esc(label(a))}</option>`).join('');
+  const opts = account.provider === 'grok' ? { cacheWriteLabel: 'Reasoning' }
+    : ['opencode', 'antigravity'].includes(account.provider) ? { cacheWriteLabel: 'Reasoning', reasoningColumn: true } : {};
+  return `<label><span class="sr-only">Account</span><select data-inspect-provider="${esc(group.provider)}" aria-label="Account">${options}</select></label>
+    <div class="stat-row">${statRow(account)}</div>
+    ${account.stale ? `<p class="limit-stale">Last observed ${esc(new Date(account.fetchedAt).toLocaleString())}</p>` : ''}
+    ${account.usageError ? `<p class="limit-stale">${esc(account.usageError)}</p>` : ''}
+    ${LIMITLESS_PROVIDERS.has(account.provider) ? '' : `<div class="card">${limitsCard(account, account.rateLimits)}</div>`}
+    <div class="table-scroll"><table>${modelTable(account.models || [], opts)}</table></div>`;
+}
+document.addEventListener('change', e => {
+  const provider = e.target.dataset.inspectProvider;
+  if (!provider) return;
+  selectedAccountByProvider.set(provider, e.target.value);
+  const group = lastAllAccounts.find(a => a.provider === provider);
+  if (group) setHtml(document.getElementById(`account-body-${group.id}`), accountDetailsHtml(group));
+});
+
 function refreshButton(id) {
+  if (lastSourceAccounts.find(a => a.id === id)?.remote) return '<span class="limit-stale">Synced from device</span>';
   return `<button class="refresh-btn" data-account="${id}" title="Force a live check now">Refresh</button>`;
 }
 
@@ -2393,7 +2453,7 @@ function limitEconomicsHtml(history) {
   if (history.error) return `<p class="empty">${esc(history.error)}</p>`;
   const metric = ecoMetricOf();
   const ecoHidden = getEcoHidden();
-  const byId = new Map((lastAllAccounts || []).map(a => [a.id, a]));
+  const byId = new Map((lastSourceAccounts || []).map(a => [a.id, a]));
 
   // Account-level switches matter here: two Codex profiles can have unrelated
   // plans and economics, so hiding a whole provider is too blunt.
@@ -2401,6 +2461,7 @@ function limitEconomicsHtml(history) {
   const cards = [];
 
   for (const entry of (history.accounts || [])) {
+    if (selectedDevice && selectedDevice !== 'all' && !byId.has(entry.id)) continue;
     const account = byId.get(entry.id) || { id: entry.id, provider: entry.provider, label: entry.id };
     const windowsToUse = economicsWindowsFor(account, entry.windows || []);
     if (!windowsToUse.length) continue;
@@ -2425,7 +2486,7 @@ function limitEconomicsHtml(history) {
   const accountToggles = availableAccounts.map(a => `
     <label class="eco-filter" style="--filter-color:var(${accentVar(a.provider)})">
       <input type="checkbox" data-eco-hide-account="${a.id}" ${ecoHidden.has(a.id) ? '' : 'checked'}>
-      <span><span class="eco-top-dot dot ${dotClass(a.provider)}"></span>${accountTitle(a)}</span>
+      <span><span class="eco-top-dot dot ${dotClass(a.provider)}"></span>${esc(accountTitle(a))}</span>
     </label>`).join('');
 
   // The shell is a fixed-height layout with every panel set to overflow:hidden,
@@ -2524,7 +2585,7 @@ function ensureLayout(allAccounts, visibleAccounts) {
     `<button class="tab report-tab${activeId === 'limits' ? ' active' : ''}" data-id="limits"><span class="dot"></span>Limit Economics</button>` +
     visibleAccounts.map(a => `
       <button class="tab${a.id === activeId ? ' active' : ''}" data-id="${a.id}" style="--tab-accent:var(${accentVar(a.provider)})">
-        <span class="dot ${dotClass(a.provider)}"></span>${accountTitle(a)}
+        <span class="dot ${dotClass(a.provider)}"></span>${esc(accountTitle(a))}
       </button>`).join('') +
     `<button class="tab settings-tab${activeId === 'settings' ? ' active' : ''}" data-id="settings">Settings</button>`;
 
@@ -2537,6 +2598,10 @@ function ensureLayout(allAccounts, visibleAccounts) {
         <p class="limit-stale usage-error" id="usage-error-${a.id}" hidden></p>
         ${LIMITLESS_PROVIDERS.has(a.provider) ? '' : `<div class="card" id="limits-${a.id}"></div>`}
         <div class="stat-row" id="stats-${a.id}"></div>
+        <details class="account-details" id="account-details-${a.id}">
+          <summary>Accounts <span id="account-count-${a.id}"></span></summary>
+          <div class="account-detail-body" id="account-body-${a.id}"></div>
+        </details>
          <div class="card models-card${a.provider === 'opencode' ? ' opencode-models-card' : ''}">
            <h2 class="card-title">Cost by model</h2>
            <div class="table-scroll"><table id="models-${a.id}"></table></div>
@@ -2546,6 +2611,27 @@ function ensureLayout(allAccounts, visibleAccounts) {
 }
 
 let lastFetchedAt = null;
+let lastSnapshot = null;
+let selectedDevice = null;
+document.getElementById('device-filter').addEventListener('change', e => {
+  selectedDevice = e.target.value;
+  builtForIds = null;
+  if (lastSnapshot) render(lastSnapshot);
+});
+function renderMesh(mesh) {
+  const picker = document.getElementById('machine-picker');
+  picker.hidden = mesh?.mode !== 'helm';
+  if (picker.hidden) { selectedDevice = null; return; }
+  const devices = mesh.devices || [];
+  if (selectedDevice !== 'all' && !devices.some(d => d.id === selectedDevice)) {
+    selectedDevice = devices.find(d => d.local)?.id || devices[0]?.id || null;
+  }
+  const select = document.getElementById('device-filter');
+  setHtml(select, devices.map(d =>
+    `<option value="${esc(d.id)}">${esc(d.name)}${d.local ? ' · this machine' : ''}</option>`).join('') + '<option value="all">All machines</option>');
+  select.value = selectedDevice;
+  document.getElementById('footer').textContent = 'Refreshes every 30s · costs from real tokens × published rates';
+}
 
 async function load() {
   const res = await fetch('/api/usage');
@@ -2554,14 +2640,20 @@ async function load() {
 }
 
 function render(data) {
+  lastSnapshot = data;
+  if (data.mesh) renderMesh(data.mesh);
+  if (selectedDevice && selectedDevice !== 'all') data = { ...data, accounts: data.accounts.filter(a => a.machineId === selectedDevice) };
   lastFetchedAt = data.fetchedAt;
   document.getElementById('updated').textContent = 'updated ' + new Date(data.fetchedAt).toLocaleTimeString();
   if (!data.accounts || !data.accounts.length) {
+    lastAllAccounts = []; lastSourceAccounts = []; builtForIds = null;
     document.getElementById('tabs').innerHTML = '';
-    document.getElementById('panels').innerHTML = '<p class="empty">No Claude, Codex, Grok, Antigravity, OpenCode, or Devin accounts detected on this machine.</p>';
+    document.getElementById('panels').innerHTML = '<p class="empty">No Claude, Codex, Grok, Antigravity, OpenCode, or Devin accounts available for this device selection.</p>';
     return;
   }
 
+  lastSourceAccounts = data.accounts;
+  data = { ...data, accounts: groupByProvider(data.accounts) };
   lastAllAccounts = data.accounts;
   const hidden = getHidden();
   const visible = data.accounts.filter(a => !hidden.has(a.id));
@@ -2578,10 +2670,15 @@ function render(data) {
     const modelsEl = document.getElementById(`models-${a.id}`);
     const usageErrorEl = document.getElementById(`usage-error-${a.id}`);
     if (usageErrorEl) {
-      usageErrorEl.textContent = a.usageError ? `Token history unavailable: ${a.usageError}` : '';
-      usageErrorEl.hidden = !a.usageError;
+      usageErrorEl.textContent = a.usageError ? `Token history unavailable: ${a.usageError}` : a.cachedNote || '';
+      usageErrorEl.hidden = !usageErrorEl.textContent;
     }
-    if (limitsEl) setHtml(limitsEl, limitsCard(a, a.rateLimits));
+    if (limitsEl) {
+      limitsEl.hidden = a.members.length !== 1;
+      if (a.members.length === 1) setHtml(limitsEl, limitsCard(a.members[0], a.members[0].rateLimits));
+    }
+    document.getElementById(`account-count-${a.id}`).textContent = `(${a.members.length})`;
+    setHtml(document.getElementById(`account-body-${a.id}`), accountDetailsHtml(a));
     if (statsEl) setHtml(statsEl, statRow(a));
     if (modelsEl) {
       const tableOpts = a.provider === 'grok'
