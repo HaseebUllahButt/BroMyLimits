@@ -26,6 +26,10 @@ $stagingDir = Join-Path $stagingParent $artifactName
 
 $runtimeFiles = @(
   'server.js',
+  'scan-cache.js',
+  'helm-sync.js',
+  'helm-usage.mjs',
+  'helm-snapshot.mjs',
   'profile-discovery.js',
   'limit-history.js',
   'ccusage-runner.js',

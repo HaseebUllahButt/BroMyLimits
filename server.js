@@ -9,6 +9,8 @@ const { detectProfileAccounts, getHomeDir, isProviderDisabled } = require('./pro
 const { resolveCcusageCommand, runCcusage: runCcusageCommand } = require('./ccusage-runner');
 const limitHistory = require('./limit-history');
 const { FileRollupCache, ResultCache, loadIndex, saveIndex, blankStats, addStats } = require('./scan-cache');
+const { HelmSync } = require('./helm-sync');
+const helmSync = new HelmSync();
 
 let DatabaseSync;
 try {
@@ -38,10 +40,7 @@ const CCUSAGE_BIN = resolveCcusageCommand();
 
 // --- Account discovery -----------------------------------------------------
 async function detectAccounts() {
-  const discovered = await detectProfileAccounts();
-  const activeClaude = await selectActiveClaudeAccount(discovered);
-  const accounts = discovered.filter((account) => account.provider !== 'claude');
-  if (activeClaude) accounts.push(activeClaude);
+  const accounts = await detectProfileAccounts();
 
   if (!isProviderDisabled('antigravity')) {
     const antigravityAuth = await readAntigravityAuth();
@@ -93,34 +92,6 @@ async function detectAccounts() {
   }
 
   return accounts;
-}
-
-// The dashboard is an overview of the profile currently in use, not an
-// archive of every Claude login directory on disk. An explicit service/CLI
-// environment wins; otherwise the freshest statusline/config snapshot is the
-// best durable signal of which profile Claude Code used most recently.
-async function selectActiveClaudeAccount(accounts) {
-  const claudeAccounts = accounts.filter((account) => account.provider === 'claude');
-  if (claudeAccounts.length <= 1) return claudeAccounts[0] || null;
-
-  if (process.env.CLAUDE_CONFIG_DIR) {
-    const explicit = path.resolve(process.env.CLAUDE_CONFIG_DIR);
-    const match = claudeAccounts.find((account) => path.resolve(account.configDir) === explicit);
-    if (match) return match;
-  }
-
-  const ranked = await Promise.all(claudeAccounts.map(async (account) => {
-    const cached = await getCachedClaudeRateLimits(account).catch(() => null);
-    if (Number(cached?.fetchedAtMs) > 0) return { account, activityMs: Number(cached.fetchedAtMs) };
-    try {
-      const info = await stat(account.configDir);
-      return { account, activityMs: info.mtimeMs };
-    } catch {
-      return { account, activityMs: 0 };
-    }
-  }));
-  ranked.sort((a, b) => b.activityMs - a.activityMs || a.account.label.localeCompare(b.account.label));
-  return ranked[0].account;
 }
 
 // --- Antigravity / Google Cloud Code Assist rate limits -------------------
@@ -3126,7 +3097,7 @@ const STALE_MAX_MS = 60 * 60_000;
 // Bumped whenever the shape of an account section changes: the disk cache
 // holds whole replies, so a stale one silently serves the old shape and the
 // new field simply never appears (prompt-cache stats, added at v4).
-const DISK_CACHE_VERSION = 6;
+const DISK_CACHE_VERSION = 7;
 const DISK_CACHE_PATH = path.join(__dirname, 'usage-cache.json');
 const SCAN_INDEX_PATH = process.env.CC_USAGE_SCAN_INDEX || path.join(__dirname, 'scan-index.json');
 const fileCaches = [claudeSessionCache, codexRolloutCache, dbResultCache];
@@ -3305,14 +3276,26 @@ async function getUsage({ force = false, rebuild = false } = {}) {
   const fresh = await refreshUsage();
   return { ...fresh, cache: cacheReport({ source: 'scan', ageMs: 0 }) };
 }
+async function publishLocal(usage) {
+  if (!await helmSync.network()) return;
+  await helmSync.publish(usage, await limitHistory.analyze({ maxStepsPerWindow: 100 }));
+}
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
+
+  if (url.pathname === '/api/health') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ ok: true, product: 'Bro My Limits' }));
+    return;
+  }
 
   if (url.pathname === '/api/usage') {
     try {
       const force = url.searchParams.get('force') === '1';
       const rebuild = url.searchParams.get('rebuild') === '1';
-      const data = await getUsage({ force, rebuild });
+      const local = await getUsage({ force, rebuild });
+      const data = url.searchParams.get('scope') === 'local' ? local : await helmSync.view(local);
       res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
       res.end(JSON.stringify(data));
     } catch (e) {
@@ -3327,6 +3310,11 @@ const server = http.createServer(async (req, res) => {
   // too so the response reflects it immediately.
   if (url.pathname === '/api/refresh-limits' && req.method === 'POST') {
     const accountId = url.searchParams.get('id');
+    if (accountId?.startsWith('helm-')) {
+      res.writeHead(409, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Refresh limits on the originating device.' }));
+      return;
+    }
     try {
       const accounts = await detectAccounts();
       const targets = accountId ? accounts.filter((a) => a.id === accountId) : accounts;
@@ -3379,9 +3367,10 @@ const server = http.createServer(async (req, res) => {
   // window actually costs in tokens and dollars, per cycle and pooled.
   if (url.pathname === '/api/limit-history') {
     try {
-      const data = await limitHistory.analyze({
+      const local = await limitHistory.analyze({
         maxStepsPerWindow: Number(url.searchParams.get('steps')) || 400,
       });
+      const data = url.searchParams.get('scope') === 'local' ? local : await helmSync.history(local);
       res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
       res.end(JSON.stringify(data));
     } catch (e) {
@@ -3534,6 +3523,19 @@ if (require.main === module) {
     }, BACKFILL_REFRESH_MS);
     timer.unref();
     startHistorySampler();
+    const sync = async () => {
+      try {
+        const usage = await getUsage();
+        await publishLocal(usage);
+        await helmSync.ensureSharing();
+        await helmSync.view(usage, { wait: true });
+      } catch (e) { console.error('Bro My Limits sync:', e.message); }
+    };
+    if (process.env.BRO_MY_LIMITS_HELM === 'off') helmSync.stopSharing().catch(() => {});
+    else {
+      sync();
+      setInterval(sync, 60_000).unref();
+    }
   });
 }
 
