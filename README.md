@@ -1,11 +1,82 @@
-# CC Usage Dashboard
+# Bro My Limits
 
-Local dashboard for Claude Code, Codex, Devin, Grok, Antigravity/Pi, and
-OpenCode usage: what each account spent, how much of it the prompt cache
-paid for, and how much of every rate-limit window is left.
+A standalone usage dashboard for Codex, Claude Code, Antigravity/Pi,
+OpenCode, Grok, and Devin. Usage is grouped by provider, including tokens,
+model costs, prompt-cache savings, and rate-limit readings.
 
-It reads only what the agents already wrote on this machine. A background
-refresh makes no network requests at all.
+With Helm installed and joined to a network, it also reads the other
+machines' usage through that network. The dashboard opens on this machine;
+use the machine picker to choose another machine or **All machines**. Provider
+tabs and reports follow that selection. Account-specific limit readings stay
+separate inside their provider because percentages cannot be added together.
+
+## One-line install (Linux / macOS)
+
+Requires Node.js 20+; Helm integration requires Node.js 22+ and an existing
+Helm installation. No Git checkout or administrator access is needed:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/HaseebUllahButt/BroMyLimits/main/install.sh | sh
+```
+
+Open <http://127.0.0.1:47291>. The installer starts a user service and creates
+`bro-my-limits` and the compatible `cc-usage-dashboard` launcher. Re-running
+the installer updates the app and restarts the service, retaining its data.
+To pass options, use `| sh -s -- --no-browser` or `| sh -s -- 3000`.
+
+```sh
+bro-my-limits status
+bro-my-limits update
+bro-my-limits install-mesh
+bro-my-limits install-mesh VM
+bro-my-limits update --mesh
+```
+
+`install-mesh` distributes the installed app to current Helm machines through
+Helm's SSH mesh and starts their services. `update --mesh` downloads the latest
+published version first, then distributes it. Targets need a POSIX shell,
+Node.js, tar, and working Helm SSH access. Unreachable machines are reported
+and can be retried by running `install-mesh` when they reconnect. Installation
+does not queue unattended changes for offline machines.
+
+## How Helm integration works
+
+- Each Bro My Limits instance shares a local-only summary at
+  `~/.helm/bro-my-limits.json`. Peers read it through Helm's authenticated
+  TCP tunnel, using a read-only listener on `127.0.0.1:47292`. The app registers
+  that port in Helm's supported `tunnel.ports` setting; uninstall removes its
+  registration. SSH file reads support older add-on installations. Summaries include model/token costs, cached limits, and derived limit
+  economics; credentials and raw conversations are never included.
+- A machine without Bro My Limits contributes Helm's existing `usage.report`
+  and `usage.buckets` data. Limits become available when Bro My Limits is also
+  installed there. Bro My Limits does not alter Helm's source or protocol.
+- Each machine contributes one source: its Bro My Limits summary when
+  available, otherwise Helm's report. These sources are never added together.
+  Accounts from different machines have separate internal IDs, while the UI
+  combines them into provider totals. Expand **Accounts** inside a provider tab
+  to inspect one account's usage, models, and limits.
+- Sync runs every minute. Last-known peer summaries survive restarts in
+  `helm-cache.json`; a sleeping machine retains its observed usage. Unknown
+  devices have no usage data, and revoked members are excluded immediately.
+- Helm's cached reports retain provider/model totals but cannot provide daily
+  series per provider. In that fallback, the daily chart is marked unavailable.
+  Shared rate limits remain observations from their originating device; use
+  that device to request a live provider refresh.
+
+Standalone mode still reads local agent records without requiring Helm. Set
+`BRO_MY_LIMITS_HELM=off` in the server's environment to disable integration.
+Set `BRO_MY_LIMITS_HELM_PEERS_ONLY=1` to include only remote machines with Bro
+My Limits installed. Nonstandard paths can be supplied with `HELM_DIR` and
+`BRO_MY_LIMITS_HELM_SOURCE` (the Helm source installation, normally `~/.helm-src`).
+For a service, put overrides in its systemd/launchd environment and restart it.
+The dashboard and sync listener stay bound to loopback; no public port or SSH
+server is needed for summary sync. SSH is only required for mesh installation
+and the fallback for older add-on versions. `BRO_MY_LIMITS_SYNC_PORT` can
+change the sync port; use the same value on participating machines.
+
+The summaries count usage recorded on each machine. Copied or mirrored agent
+transcripts can therefore count on both machines; per-event deduplication
+across machines is not possible from Helm's aggregate reports.
 
 ## Windows quick setup
 
@@ -80,7 +151,7 @@ Requires Node.js 20 or newer. From this directory:
 One-line install:
 
 ```sh
-d="$(mktemp -d)" && git clone --depth 1 https://github.com/HaseebUllahButt/BroMyLimits.git "$d/BroMyLimits" && "$d/BroMyLimits/install.sh" 47291
+curl -fsSL https://raw.githubusercontent.com/HaseebUllahButt/BroMyLimits/main/install.sh | sh
 ```
 
 On macOS, run `install.sh` in Terminal or double-click `install.command`. The
@@ -188,7 +259,9 @@ single percentage explains its totals.
 | `GET /api/limit-history` | Derived view: per account and window, the per-percent rate for each cycle plus a pooled figure. |
 | `GET /api/limit-history/raw?account=&window=&limit=` | Raw ledger rows, for exporting or charting elsewhere. |
 | `POST /api/limit-history/backfill` | Re-replay the Codex transcripts now. |
-| `GET /api/usage` | Everything the dashboard draws: per-account spend, tokens, models, limits and prompt-cache stats. |
+| `GET /api/usage` | Local and Helm peer usage: per-account spend, tokens, models, limits and prompt-cache stats. |
+| `GET /api/usage?scope=local` | This machine only, with no peer aggregation. |
+| `GET /api/health` | Lightweight service health check. |
 | `GET /api/usage?force=1` | Re-check every file, seal included, and re-read only what changed. |
 | `GET /api/usage?rebuild=1` | Distrust the cache key and re-read every byte. The repair for an entry whose `(mtime, size, ino)` lied. |
 | `GET /api/cache` | What the scan cache is doing: files and databases reused, bytes skipped, per-account timings. |
